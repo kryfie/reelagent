@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#10141d" />
+  <meta name="description" content="Wrzuć zdjęcia, wybierz styl i stwórz krótką rolkę na telefon." />
+  <title>ReelAgent — Twoje zdjęcia. Gotowa rolka.</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="ambient glow-a"></div><div class="ambient glow-b"></div>
+  <header class="topbar wrap">
+    <div class="brand"><span class="brand-icon">✦</span><span>reel<span class="brand-soft">agent</span></span><span class="version">BETA 1.0</span></div>
+    <span class="topbar-note"><span class="online-dot"></span>Prosty generator rolek</span>
+  </header>
+  <main class="wrap layout">
+    <section class="intro">
+      <div class="eyebrow"><span class="sparkle">✳</span> TWOJE MAŁE STUDIO WIDEO</div>
+      <h1>Ze zdjęć do <span class="gradient-word">rolki.</span><br>W kilku kliknięciach.</h1>
+      <p>Dodaj zdjęcia, ustaw styl swojej marki i odbierz pionowe wideo gotowe do publikacji. Bez programu do montowania.</p>
+      <div class="steps"><span><b>01</b> Zdjęcia</span><i></i><span><b>02</b> Styl</span><i></i><span><b>03</b> Film</span></div>
+    </section>
+
+    <div class="columns">
+      <section class="panel editor" aria-label="Ustawienia filmu">
+        <div class="panel-header"><div><div class="section-index">KROK 01</div><h2>Dodaj zdjęcia</h2><p>Od 2 do 8 zdjęć. Ich kolejność decyduje o kolejności ujęć.</p></div><div class="header-icon">▧</div></div>
+        <label class="dropzone" id="dropzone" tabindex="0" for="photos-input">
+          <input id="photos-input" type="file" accept="image/*,.heic,.heif" multiple hidden />
+          <span class="drop-icon">↑</span>
+          <strong>Wybierz zdjęcia z telefonu</strong>
+          <small>lub przeciągnij je tutaj na komputerze</small>
+          <span class="soft-button">+ Dodaj zdjęcia</span>
+        </label>
+        <div id="gallery" class="gallery" aria-live="polite"></div>
+        <p id="counter" class="tiny-note">Nie wybrano jeszcze zdjęć</p>
+
+        <div class="rule"></div>
+        <div class="panel-header compact"><div><div class="section-index">KROK 02</div><h2>Ustaw wygląd</h2></div><div class="header-icon">◈</div></div>
+        <div class="field"><label for="brand">Nazwa marki</label><input id="brand" type="text" value="Churreria Mundo" maxlength="50" autocomplete="off" /></div>
+        <div class="field"><label for="title">Nagłówek rolki</label><input id="title" type="text" value="Chwile, które smakują" maxlength="75" /></div>
+        <div class="field"><label for="subtitle">Krótki opis</label><input id="subtitle" type="text" value="Coś pysznego na każdą okazję" maxlength="100" /></div>
+        <div class="field"><label for="cta">Zakończenie / zaproszenie</label><input id="cta" type="text" value="Wpadnij na coś słodkiego!" maxlength="80" /></div>
+        <div class="field"><div class="label-row"><label>Styl filmu</label><small>stała kolorystyka</small></div>
+          <div class="theme-picker" role="group" aria-label="Styl filmu">
+            <button class="theme-option selected" type="button" data-theme="cafe" aria-pressed="true"><span class="theme-preview cafe"><i></i><i></i><i></i></span><strong>Ciepły</strong><small>Kawiarnia & food</small></button>
+            <button class="theme-option" type="button" data-theme="fresh" aria-pressed="false"><span class="theme-preview fresh"><i></i><i></i><i></i></span><strong>Nowoczesny</strong><small>Firmy & usługi</small></button>
+            <button class="theme-option" type="button" data-theme="pop" aria-pressed="false"><span class="theme-preview pop"><i></i><i></i><i></i></span><strong>Energia</strong><small>Dynamiczne reels</small></button>
+          </div>
+        </div>
+        <div class="field"><label>Tempo montażu</label><div class="segmented" role="group" aria-label="Tempo montażu"><button type="button" class="pace selected" data-pace="fast" aria-pressed="true">⚡ Dynamiczne</button><button type="button" class="pace" data-pace="calm" aria-pressed="false">☁ Spokojne</button></div></div>
+        <div class="optional-fields">
+          <div class="optional"><label for="music">♫ Własna muzyka <span>opcjonalnie</span></label><input id="music" type="file" accept="audio/mpeg,audio/mp4,audio/wav,audio/aac,.mp3,.wav,.m4a,.aac"/><small>MP3, M4A lub WAV. Dodaj tylko utwór, do którego masz prawa.</small></div>
+          <div class="optional"><label for="logo">◉ Logo <span>opcjonalnie</span></label><input id="logo" type="file" accept="image/*,.heic,.heif"/><small>Najlepiej PNG z przezroczystym tłem.</small></div>
+          <div class="optional"><label for="pin">⌁ Kod dostępu <span>jeśli ustawiony na serwerze</span></label><input id="pin" type="password" placeholder="Kod prywatnego generatora" autocomplete="off" /></div>
+        </div>
+        <button type="button" class="primary-btn" id="generate" disabled><span>✦</span> Wygeneruj rolkę <span class="right-arrow">↗</span></button>
+        <p class="under-button">Pionowy MP4 · 9:16 · bez znaku wodnego · bez konta</p>
+      </section>
+      <aside class="preview-column">
+        <div class="preview-panel panel">
+          <div class="preview-heading"><div><div class="section-index">KROK 03</div><h2>Twoja rolka</h2></div><span class="format-chip">9:16 / MP4</span></div>
+          <div class="phone-frame">
+            <div id="placeholder" class="placeholder-video">
+              <div class="mock-video"><div class="mock-header">REEL STUDIO <small>● ● ●</small></div><div class="mock-caption">Tu pojawi się<br><em>Twoja rolka</em></div><div class="mock-photo"><span>✦</span></div><div class="mock-footer">TWOJA MARKA</div></div>
+              <div class="empty-overlay"><div class="empty-play">▶</div><p>Podgląd po wygenerowaniu</p></div>
+            </div>
+            <video id="video" controls playsinline preload="metadata" hidden></video>
+            <div id="progress-overlay" class="progress-overlay" hidden><div class="spinner"></div><strong id="progress-label">Tworzę Twój film…</strong><span id="progress-percent">0%</span><div class="progress-track"><div id="progress-bar"></div></div><small>Nie zamykaj tej strony podczas generowania.</small></div>
+          </div>
+          <div class="result-actions" id="result-actions" hidden>
+            <div class="success-line"><span>✓</span><span id="result-info">Gotowy film</span></div>
+            <button class="share-button" type="button" id="share" disabled><span>↗</span> Udostępnij / Zapisz w Zdjęciach</button>
+            <a class="download-button" id="download" href="#" download="moja-rolka.mp4">↓ Pobierz film MP4</a>
+            <button class="reset-button" type="button" id="reset">↺ Zrób kolejną rolkę</button>
+          </div>
+          <div id="error" class="error-box" role="alert" hidden></div>
+          <div class="tip"><span>✦</span><p><strong>Na iPhonie:</strong> po wygenerowaniu kliknij „Udostępnij”, a następnie wybierz „Zachowaj wideo”, jeśli ta opcja jest dostępna. Możesz też pobrać plik MP4 i zapisać go przez aplikację Pliki.</p></div>
+        </div>
+        <div class="note-card"><div class="note-icon">⌁</div><p><strong>Prywatność:</strong> zdjęcia służą wyłącznie do przygotowania filmu. W tej wersji testowej materiały i gotowe pliki są przechowywane tymczasowo na serwerze. Nie przesyłaj materiałów wrażliwych.</p></div>
+      </aside>
+    </div>
+    <footer>REELAGENT STARTER <span>·</span> WERSJA TESTOWA <span>·</span> Montaż automatyczny, bez generowania nowych scen AI</footer>
+  </main>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
