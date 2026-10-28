@@ -1,49 +1,76 @@
-"""Run: python tests/test_smoke.py; requires FastAPI, PIL, FFmpeg and httpx."""
+"""Smoke test: python tests/test_smoke.py (requires Pillow, httpx, FFmpeg)."""
 import io
-import sys
-import time
+import json
+import os
 import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
-from PIL import Image, ImageDraw
+
 from fastapi.testclient import TestClient
+from PIL import Image, ImageDraw
 
-sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from app import app
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app import app, SAFE
 
 
-def img_bytes(index):
-    im=Image.new('RGB',(900,1400),[(193,125,76),(48,118,104),(93,79,154)][index%3]);d=ImageDraw.Draw(im)
-    d.ellipse((90+index*40,300,750,950),fill=(255,210,133))
-    d.rounded_rectangle((160,1000,740,1140),radius=45,fill=(86,47,32))
-    buffer=io.BytesIO();im.save(buffer,'JPEG',quality=85);return buffer.getvalue()
+def img_data(i):
+    image = Image.new('RGB',(700,1200),[(169,95,62),(42,122,117),(82,62,145)][i%3]);draw=ImageDraw.Draw(image)
+    draw.ellipse((90,220,590,930),fill=(250,211,132))
+    buf=io.BytesIO();image.save(buf,format='JPEG',quality=80)
+    return buf.getvalue()
+
+
+def wait(client,id):
+    deadline=time.time()+160
+    while time.time()<deadline:
+        s=client.get('/api/jobs/'+id).json()
+        print(s['state'],s['progress'],s['message'],flush=True)
+        if s['state']=='error': raise AssertionError(s)
+        if s['state']=='ready':return s
+        time.sleep(.75)
+    raise AssertionError('Timed out')
+
+
+def verify_video(raw):
+    temp=Path(tempfile.gettempdir())/'reelagent-v2-test.mp4';temp.write_bytes(raw)
+    inf=subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=codec_name,width,height','-show_entries','format=duration','-of','json',str(temp)],text=True)
+    parsed=json.loads(inf)
+    assert parsed['streams'][0]['codec_name']=='h264'
+    assert parsed['streams'][0]['width']==540 and parsed['streams'][0]['height']==960
+    assert float(parsed['format']['duration'])>=9.8
+    print('Created',temp, 'bytes:',len(raw),'duration:',parsed['format']['duration'])
+    return temp
 
 
 def main():
     client=TestClient(app)
-    resp=client.get('/');assert resp.status_code == 200 and 'reelagent' in resp.text.lower()
-    for file in ['app.js','style.css']:
-        assert client.get('/static/'+file).status_code == 200
-    assert client.get('/api/health').json()['ok']
-    bad=client.post('/api/jobs',files=[('photos',('a.jpg',img_bytes(0),'image/jpeg'))]);assert bad.status_code==400,bad.text
-    data={'brand':'Churreria Mundo','title':'Świeże churros na dziś','subtitle':'Prosto z kuchni • Szczecin','cta':'Zapraszamy!','theme':'cafe','pace':'fast'}
-    files=[('photos',(f'p{i}.jpg',img_bytes(i),'image/jpeg')) for i in range(3)]
-    start=time.monotonic();r=client.post('/api/jobs',data=data,files=files)
-    print('POST',r.status_code,r.text);assert r.status_code==200
-    ident=r.json()['id']
-    deadline=time.monotonic()+125
-    while time.monotonic()<deadline:
-        state=client.get('/api/jobs/'+ident).json()
-        print('STATE',state['state'],state['progress'],state['message'][:100])
-        if state['state'] in ('ready','error'):break
-        time.sleep(1)
-    assert state['state']=='ready',state
-    file=client.get('/api/jobs/'+ident+'/video')
-    assert file.status_code==200
-    assert file.headers['content-type'].startswith('video/mp4')
-    path=Path('/mnt/data/reelagent-smoke-test.mp4');path.write_bytes(file.content)
-    ff=subprocess.check_output(['ffprobe','-v','error','-show_entries','stream=width,height,codec_name','-show_entries','format=duration','-of','default=noprint_wrappers=1',str(path)],text=True)
-    print('VIDEO',ff,'BYTES',len(file.content),'SECONDS',round(time.monotonic()-start,2))
-    assert 'width=540' in ff and 'height=960' in ff and 'codec_name=h264' in ff
-    print('SMOKE TEST PASS')
+    assert '2.0' in client.get('/').text
+    assert client.get('/static/app.js').status_code==200
+    assert client.get('/api/health').json()['safe_zone']==list(SAFE)
+    media=[('media',(f'p{i}.jpg',img_data(i),'image/jpeg')) for i in range(3)]
+    bad=client.post('/api/jobs',files=media,data={'style':'wrong','scene_text':json.dumps([{}, {}, {}])})
+    assert bad.status_code==400,bad.text
+    captions=[{'caption':'Pyszne churros','detail':'Najlepsze do kawy'}, {'caption':'Świeżo na miejscu','detail':'Wpadnij do nas'},{'caption':'Chwila dla Ciebie','detail':'Dziś i jutro'}]
+    response=client.post('/api/jobs',files=media,data={'style':'film','length':'10','brand':'Churreria Mundo','cta':'Wpadnij dziś!','scene_text':json.dumps(captions)})
+    print('POST',response.status_code,response.text,flush=True);assert response.status_code==200
+    result=wait(client,response.json()['id'])
+    video=client.get('/api/jobs/'+response.json()['id']+'/video')
+    assert video.status_code==200
+    verify_video(video.content)
+    # Validate real moving footage path as well.
+    with tempfile.TemporaryDirectory() as d:
+        sample=Path(d)/'input.mp4'
+        subprocess.run(['ffmpeg','-y','-loglevel','error','-f','lavfi','-i','testsrc2=size=320x568:rate=20','-t','2',
+                        '-an','-c:v','libx264','-preset','ultrafast',str(sample)],check=True)
+        media2=[('media',('movie.mp4',sample.read_bytes(),'video/mp4')),('media',('photo.jpg',img_data(0),'image/jpeg'))]
+        captions2=[{'caption':'Ruchomy kadr','detail':'To jest wideo'},{'caption':'Kawa i churros','detail':'Bezpieczne napisy'}]
+        result=client.post('/api/jobs',files=media2,data={'style':'dynamic','length':'10','brand':'Test','cta':'Do zobaczenia','scene_text':json.dumps(captions2)})
+        print('VIDEO POST',result.status_code,result.text,flush=True);assert result.status_code==200
+        wait(client,result.json()['id'])
+        verify_video(client.get('/api/jobs/'+result.json()['id']+'/video').content)
+    print('ALL SMOKE TESTS PASSED')
+
 
 if __name__=='__main__':main()

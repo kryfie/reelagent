@@ -1,8 +1,9 @@
+# OPTIONAL: do not deploy a second service if you already have ReelAgent on Render.
 services:
   - type: web
     name: reelagent-starter
     runtime: docker
-    plan: free
+    plan: starter
     healthCheckPath: /api/health
     envVars:
       - key: APP_PIN

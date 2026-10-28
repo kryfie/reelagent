@@ -1,12 +1,13 @@
-"""ReelAgent Starter: minimal photo-to-MP4 web application.
+"""ReelAgent 2.0 — photo/video to safe-zone vertical MP4.
 
-Files are temporary; no API keys, account or database required. Designed for a
-single-user pilot, NOT a multi-tenant public video rendering service.
+Pilot for one trusted user. Runs native FFmpeg on Render; no paid AI API.
+Uploads and outputs are short-lived. Files are never committed to GitHub.
 """
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -30,348 +31,393 @@ except ImportError:
     pass
 
 BASE = Path(__file__).parent
-TMP_ROOT = Path(os.environ.get('REEL_TMP_DIR', tempfile.gettempdir())) / 'reelagent-jobs'
+TMP_ROOT = Path(os.environ.get('REEL_TMP_DIR', tempfile.gettempdir())) / 'reelagent-v2-jobs'
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
-MAX_PHOTOS = 8
-MIN_PHOTOS = 2
-MAX_BYTES_PER_IMAGE = 12 * 1024 * 1024
-MAX_BYTES_TOTAL = 70 * 1024 * 1024
-MAX_AUDIO_BYTES = 15 * 1024 * 1024
-MAX_AGE = 60 * 60
-WIDTH, HEIGHT = 540, 960  # Faster than 1080p on tiny free CPUs; ideal vertical aspect ratio
-FPS = 20
+WIDTH, HEIGHT, FPS = 540, 960, 20
+MAX_MEDIA, MIN_MEDIA = 8, 2
+MAX_IMAGE = 12 * 1024 * 1024
+MAX_VIDEO = 55 * 1024 * 1024
+MAX_AUDIO = 15 * 1024 * 1024
+MAX_TOTAL = 145 * 1024 * 1024
+EXPIRE_SECONDS = 3600
+# Conservative common safe zone for TikTok and Instagram overlays at 540x960:
+# RIGHT: x >= 414 excluded (buttons), BOTTOM: y >= 690 excluded (description),
+# TOP: y < 145 excluded (platform header). All rendered text stays inside.
+SAFE = (38, 150, 404, 670)
 
-app = FastAPI(title='ReelAgent Starter', docs_url=None, redoc_url=None)
+app = FastAPI(title='ReelAgent 2.0', docs_url=None, redoc_url=None)
 app.mount('/static', StaticFiles(directory=str(BASE / 'static')), name='static')
-
 pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='reel-render')
 lock = threading.Lock()
 jobs: dict[str, dict[str, Any]] = {}
-
-THEMES = {
-    'cafe': {'bg': (28, 21, 22), 'accent': (245, 183, 119), 'fg': (255, 243, 225), 'shade': (23, 17, 19)},
-    'fresh': {'bg': (13, 29, 39), 'accent': (117, 239, 195), 'fg': (240, 255, 252), 'shade': (8, 21, 28)},
-    'pop': {'bg': (36, 19, 54), 'accent': (255, 119, 158), 'fg': (255, 242, 249), 'shade': (24, 15, 38)},
-}
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('reelagent')
+logging.basicConfig(level=logging.INFO)
+
+STYLES = {
+    'film': {'bg': (23, 16, 15), 'accent': (244, 190, 124), 'fg': (255, 250, 244)},
+    'dynamic': {'bg': (20, 17, 30), 'accent': (255, 111, 145), 'fg': (255, 255, 255)},
+    'story': {'bg': (14, 27, 34), 'accent': (106, 235, 205), 'fg': (248, 255, 253)},
+}
 
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    filename = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
-    return ImageFont.truetype(filename, size)
+    fn = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
+    return ImageFont.truetype(fn, size)
 
 
-def wrap_text(draw: ImageDraw.ImageDraw, txt: str, fnt: ImageFont.FreeTypeFont, maxw: int, maxlines: int = 2):
-    words = txt.split()
-    lines = []
-    line = ''
-    for w in words:
-        candidate = (line + ' ' + w).strip()
-        if draw.textbbox((0, 0), candidate, font=fnt)[2] <= maxw:
-            line = candidate
+def text_lines(draw: ImageDraw.ImageDraw, value: str, fnt, width: int, limit: int = 3):
+    """Wrap Polish text, including single long tokens; never exceed safe width."""
+    value = ' '.join(value.split())
+    output = []
+    for word in value.split(' '):
+        if not word:
+            continue
+        if not output:
+            output.append('')
+        candidate = (output[-1] + ' ' + word).strip()
+        if draw.textbbox((0, 0), candidate, font=fnt)[2] <= width:
+            output[-1] = candidate
+        elif output[-1]:
+            output.append(word)
         else:
-            if line:
-                lines.append(line)
-            line = w
-    if line:
-        lines.append(line)
-    if len(lines) > maxlines:
-        lines = lines[:maxlines]
-        while draw.textbbox((0, 0), lines[-1] + '…', font=fnt)[2] > maxw and lines[-1]:
-            lines[-1] = lines[-1][:-1]
-        lines[-1] += '…'
-    return lines
+            output[-1] = word
+        # split tokens wider than our safe region
+        while output and draw.textbbox((0, 0), output[-1], font=fnt)[2] > width:
+            s = output[-1]
+            cut = len(s) - 1
+            while cut > 1 and draw.textbbox((0, 0), s[:cut], font=fnt)[2] > width:
+                cut -= 1
+            output[-1] = s[:cut]
+            output.append(s[cut:])
+    if len(output) > limit:
+        output = output[:limit]
+        last = output[-1].rstrip('…')
+        while last and draw.textbbox((0, 0), last + '…', font=fnt)[2] > width:
+            last = last[:-1]
+        output[-1] = last + '…'
+    return output
 
 
-def mix(c1, c2, ratio):
-    return tuple(round(a + (b - a) * ratio) for a, b in zip(c1, c2))
+def draw_copy(d, text, x, y, max_width, *, size=37, color=(255,255,255), limit=3, gap=8, bold=True):
+    f = font(size, bold)
+    lines = text_lines(d, text, f, max_width, limit)
+    step = size + gap
+    for i, line in enumerate(lines):
+        d.text((x, y + i*step), line, font=f, fill=color, stroke_width=1 if size > 25 else 0, stroke_fill=(0,0,0,160) if size > 25 else None)
+    return y + len(lines)*step
 
 
-def gradient_base(pal):
-    im = Image.new('RGB', (WIDTH, HEIGHT))
-    draw = ImageDraw.Draw(im)
-    for y in range(HEIGHT):
-        r = y / HEIGHT
-        draw.line((0, y, WIDTH, y), fill=mix(pal['bg'], pal['shade'], r))
-    return im
-
-
-def rounded_photo(image: Image.Image, bounds: tuple[int, int], radius=22):
-    w, h = bounds
-    fill = ImageOps.fit(image, bounds, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-    # Show all of the photo: blend a soft, edge-to-edge background with a contained original.
-    blurred = fill.filter(ImageFilter.GaussianBlur(18))
-    blurred = Image.blend(blurred, Image.new('RGB', bounds, (15, 15, 18)), .18)
-    contained = ImageOps.contain(image, (w - 10, h - 10), Image.Resampling.LANCZOS)
-    blurred.paste(contained, ((w-contained.width)//2, (h-contained.height)//2))
-    mask = Image.new('L', bounds)
-    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w-1, h-1), radius=radius, fill=255)
-    return blurred, mask
-
-
-def draw_logo(im: Image.Image, logo: Image.Image | None, x: int, y: int, max_side: int = 80):
+def logo_on(img: Image.Image, logo: Image.Image | None, x: int, y: int, max_side=52):
     if logo is None:
         return
-    lg = ImageOps.contain(logo, (max_side, max_side), Image.Resampling.LANCZOS)
-    if lg.mode != 'RGBA':
-        lg = lg.convert('RGBA')
-    im.paste(lg, (x + (max_side-lg.width)//2, y + (max_side-lg.height)//2), lg)
+    im = ImageOps.contain(logo, (max_side, max_side), Image.Resampling.LANCZOS).convert('RGBA')
+    img.alpha_composite(im, (x, y))
 
 
-def scene(image_path: Path, dest: Path, pal: dict, title: str, brand: str, subtitle: str, idx: int, total: int, logo: Image.Image | None):
-    with Image.open(image_path) as src:
-        photo = ImageOps.exif_transpose(src).convert('RGB')
-    canvas = gradient_base(pal)
-    draw = ImageDraw.Draw(canvas)
-    accent, fg = pal['accent'], pal['fg']
-
-    draw.rounded_rectangle((24, 27, 52, 55), radius=9, fill=accent)
-    draw.text((64, 30), 'REEL STUDIO', font=font(17, True), fill=fg)
-    page = f'{idx:02d} / {total:02d}'
-    page_width = draw.textbbox((0,0), page, font=font(14))[2]
-    draw.text((WIDTH-26-page_width, 33), page, font=font(14), fill=accent)
-
-    # Keep title consistent for the brand and across scenes.
-    f = font(31, True)
-    lines = wrap_text(draw, title, f, WIDTH-50, maxlines=2)
-    for j, line in enumerate(lines):
-        draw.text((25, 86 + j*43), line, font=f, fill=fg)
-
-    top = 200
-    photo_w, photo_h = WIDTH-48, 562
-    framed, mask = rounded_photo(photo, (photo_w, photo_h))
-    canvas.paste(framed, (24, top), mask)
-    draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle((41, top+18, 134, top+56), radius=14, fill=accent)
-    draw.text((55, top+27), 'NOWE', font=font(14, True), fill=pal['shade'])
-
-    draw.line((26, 793, WIDTH-26, 793), fill=mix(pal['accent'], pal['bg'], .55), width=2)
-    subfont = font(20)
-    sublines = wrap_text(draw, subtitle or 'Poznaj nas bliżej', subfont, 465, 2)
-    for j, line in enumerate(sublines):
-        draw.text((26, 811+j*27), line, font=subfont, fill=fg)
-
-    draw.text((26, 903), brand.upper()[:35], font=font(18, True), fill=accent)
-    draw_logo(canvas, logo, WIDTH-116, 864, 70)
-    canvas.save(dest, optimize=True)
-
-
-def ending(dest: Path, pal: dict, title: str, brand: str, cta: str, logo: Image.Image | None):
-    canvas = gradient_base(pal)
-    d = ImageDraw.Draw(canvas)
-    accent, fg = pal['accent'], pal['fg']
-    for radius, alpha in [(220, 24), (155, 32), (85, 43)]:
-        # subtle ripple with outlines, not too busy
-        cy = 390
-        d.ellipse((WIDTH//2-radius, cy-radius, WIDTH//2+radius, cy+radius), outline=mix(accent, pal['bg'], .72), width=3)
-    d.rounded_rectangle((WIDTH//2-56, 290, WIDTH//2+56, 402), radius=25, fill=accent)
-    d.text((WIDTH//2-23, 309), '✦', font=font(48, True), fill=pal['shade'])
-    draw_logo(canvas, logo, WIDTH//2-45, 304, 90)
-    d = ImageDraw.Draw(canvas)
-    fnt = font(39, True)
-    lines = wrap_text(d, title, fnt, 486, 2)
-    y = 474
-    for line in lines:
-        bb = d.textbbox((0, 0), line, font=fnt)
-        d.text(((WIDTH-(bb[2]-bb[0]))//2, y), line, font=fnt, fill=fg)
-        y += 53
-    cfont = font(25, True)
-    cta_lines = wrap_text(d, cta, cfont, WIDTH-105, 2)
-    y = 640
-    for line in cta_lines:
-        bb = d.textbbox((0,0), line, font=cfont)
-        d.text(((WIDTH-(bb[2]-bb[0]))//2, y), line, font=cfont, fill=accent)
-        y += 38
-    bfont = font(17, True)
-    brand_text = brand.upper()[:35]
-    bb=d.textbbox((0,0), brand_text, font=bfont)
-    d.text(((WIDTH-(bb[2]-bb[0]))//2, 855), brand_text, font=bfont, fill=fg)
-    canvas.save(dest, optimize=True)
+def subtitle_overlay(path: Path, *, style: str, caption: str, detail: str, brand: str, idx: int, count: int, logo: Image.Image | None):
+    """Only text within SAFE, regardless of style and image dimensions."""
+    pal=STYLES[style]
+    fg, accent = pal['fg'], pal['accent']
+    layer=Image.new('RGBA',(WIDTH,HEIGHT),(0,0,0,0))
+    d=ImageDraw.Draw(layer,'RGBA')
+    left,top,right,bottom=SAFE
+    if style=='film':
+        # Floating editorial panel in central-left safe area.
+        d.rounded_rectangle((left,306,right,606),radius=21,fill=(12,10,10,160))
+        d.rounded_rectangle((left+20,333,left+65,338),radius=2,fill=accent+(255,))
+        draw_copy(d,caption,left+20,364,right-left-40,size=36,color=fg,limit=3,gap=10)
+        draw_copy(d,detail,left+20,523,right-left-40,size=19,color=(248,236,219),limit=2,gap=6,bold=False)
+    elif style=='dynamic':
+        d.rounded_rectangle((left,298,right,599),radius=15,fill=(16,9,26,196))
+        d.polygon([(left,298),(left+14,298),(left+14,599),(left,599)],fill=accent+(255,))
+        d.rounded_rectangle((left+23,319,left+168,355),radius=8,fill=accent+(255,))
+        d.text((left+34,325),'ZOBACZ TO',font=font(16,True),fill=(16,12,24))
+        draw_copy(d,caption,left+24,385,right-left-41,size=38,color=fg,limit=3,gap=8)
+        draw_copy(d,detail,left+24,523,right-left-41,size=19,color=(255,237,241),limit=2,gap=6,bold=False)
+    else: # story
+        d.rounded_rectangle((left,306,right,610),radius=22,fill=(8,24,29,185))
+        d.text((left+20,330),f'SCENA {idx:02d} / {count:02d}',font=font(17,True),fill=accent)
+        d.line((left+20,367,right-20,367),fill=accent+(185,),width=2)
+        draw_copy(d,caption,left+20,394,right-left-40,size=34,color=fg,limit=3,gap=8)
+        draw_copy(d,detail,left+20,527,right-left-40,size=19,color=(226,250,242),limit=2,gap=6,bold=False)
+    # Brand remains within the safe zone, never in app top bar.
+    d.rounded_rectangle((left,155,min(right,left+250),211),radius=17,fill=(0,0,0,155))
+    if logo:
+        logo_on(layer, logo, left+8,161,39)
+        name_x=left+55
+    else:
+        name_x=left+13
+    brand_s=brand[:27]
+    brand_lines=text_lines(d,brand_s,font(17,True),right-name_x-12,1)
+    if brand_lines:
+        d.text((name_x,175),brand_lines[0],font=font(17,True),fill=fg)
+    layer.save(path)
 
 
-def ff_run(args: list[str], timeout=250):
-    proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
-    if proc.returncode:
-        raise RuntimeError('Nie udało się przygotować filmu. ' + proc.stderr.decode('utf-8', 'replace')[-350:])
+def grab_frame(input_path: Path, output_path: Path):
+    ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-ss','0.2','-i',str(input_path),'-frames:v','1',str(output_path)],timeout=45)
 
 
-def render_clip(png_path: Path, out: Path, duration: float, motion: bool):
-    frames = round(duration*FPS)
-    zoom = "zoompan=z='min(zoom+0.0008,1.05)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=540x960:fps=20" if motion else 'scale=540:960'
-    # Fade creates soft transitions while keeping individual segments trivially concatenable.
-    fade_duration = .13
-    fade_out = max(0, duration-fade_duration)
-    vf = f'{zoom},format=yuv420p,fade=t=in:st=0:d={fade_duration},fade=t=out:st={fade_out}:d={fade_duration}'
-    ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-loop','1','-framerate',str(FPS),'-i',str(png_path),
-            '-vf',vf,'-frames:v',str(frames),'-r',str(FPS),'-an','-c:v','libx264',
-            '-preset','ultrafast','-crf','23','-pix_fmt','yuv420p',str(out)], timeout=150)
+def ending_png(dest: Path, last_image: Path, *, brand: str, cta: str, style: str, logo: Image.Image | None):
+    pal=STYLES[style]
+    with Image.open(last_image) as im:
+        photo=ImageOps.fit(ImageOps.exif_transpose(im).convert('RGB'),(WIDTH,HEIGHT),method=Image.Resampling.LANCZOS)
+    photo=photo.filter(ImageFilter.GaussianBlur(22))
+    shade=Image.new('RGBA',(WIDTH,HEIGHT),pal['bg']+(218,))
+    canvas=photo.convert('RGBA');canvas.alpha_composite(shade)
+    d=ImageDraw.Draw(canvas,'RGBA'); left,top,right,bottom=SAFE
+    d.rounded_rectangle((left,270,right,640),radius=24,fill=(0,0,0,105))
+    d.rounded_rectangle((left+20,302,left+75,307),radius=2,fill=pal['accent']+(255,))
+    if logo: logo_on(canvas,logo,left+20,328,57)
+    d=ImageDraw.Draw(canvas,'RGBA')
+    draw_copy(d,brand,left+20,405,right-left-40,size=32,color=pal['fg'],limit=2)
+    draw_copy(d,cta,left+20,516,right-left-40,size=25,color=pal['accent'],limit=3,gap=7)
+    canvas.convert('RGB').save(dest,optimize=True)
 
 
-def generate_video(job_id: str, input_photos: list[Path], opts: dict[str, str], audio_path: Path | None, logo_path: Path | None):
-    directory = TMP_ROOT / job_id
+def ff_run(cmd: list[str], timeout=210):
     try:
-        pal = THEMES[opts['theme']]
+        result=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout,check=False)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('Generowanie trwało zbyt długo. Spróbuj krótszego filmu lub mniejszych plików.')
+    if result.returncode:
+        logger.warning('ffmpeg/ffprobe failed: %s',result.stderr[-1600:].decode('utf8','replace'))
+        raise RuntimeError('Nie udało się przetworzyć materiału. Sprawdź format pliku i spróbuj ponownie.')
+    return result.stdout
+
+
+def video_meta(path: Path):
+    raw=ff_run(['ffprobe','-v','error','-select_streams','v:0','-show_entries','stream=codec_name,width,height','-show_entries','format=duration',
+                '-of','json',str(path)],timeout=25)
+    try:
+        data=json.loads(raw)
+        stream=data['streams'][0]
+        duration=float(data['format']['duration'])
+        width,height=int(stream['width']),int(stream['height'])
+        if not 0.5 <= duration <= 90 or not 150 <= width <= 3840 or not 150 <= height <= 3840:
+            raise ValueError('Wymiary lub długość nieobsługiwane')
+        return duration
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise HTTPException(400,'Film musi mieć od 0,5 do 90 sekund i rozdzielczość co najmniej 150 px.')
+
+
+def photo_meta(path: Path):
+    try:
+        with Image.open(path) as im:
+            im.verify()
+        with Image.open(path) as im:
+            w,h=im.size
+            if min(w,h)<150 or w*h>35_000_000:
+                raise HTTPException(400,'Zdjęcie jest za małe lub za duże.')
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError,OSError,ValueError):
+        raise HTTPException(400,'Nie udało się odczytać zdjęcia. Użyj JPG, PNG, WEBP lub HEIC.')
+
+
+def photo_clip(photo_path: Path, overlay_path: Path, out: Path, secs: float, style: str, clip_idx: int):
+    """True camera movement on full-frame photograph, text fixed over moving image."""
+    with Image.open(photo_path) as src:
+        image=ImageOps.exif_transpose(src).convert('RGB')
+        image=ImageOps.fit(image,(650,1156),method=Image.Resampling.LANCZOS)
+        temp=out.with_suffix('.jpg')
+        image.save(temp,'JPEG',quality=90)
+    frames=round(secs*FPS)
+    # zoom and gentle pan in opposite directions; dynamic jumps between visual angles.
+    if style=='dynamic':
+        z="max(1.03,1.13-on*0.0019)" if clip_idx%2 else "min(1.14,1.02+on*0.0025)"
+    elif style=='story':
+        z="min(1.09,1.01+on*0.0009)"
+    else:
+        z="min(1.085,1.005+on*0.00075)"
+    pan_x = "iw/2-(iw/zoom/2)" if clip_idx%2==0 else "(iw-iw/zoom)*0.35"
+    pan_y = "ih/2-(ih/zoom/2)"
+    base=f"zoompan=z='{z}':x='{pan_x}':y='{pan_y}':d=1:s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1[base]"
+    vf=f'[0:v]{base};[base][1:v]overlay=shortest=1,format=yuv420p'
+    try:
+        ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-loop','1','-framerate',str(FPS),'-i',str(temp),'-loop','1','-i',str(overlay_path),
+                '-filter_complex',vf,'-frames:v',str(frames),'-r',str(FPS),'-an','-c:v','libx264','-preset','ultrafast','-crf','25',
+                '-pix_fmt','yuv420p',str(out)],timeout=155)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def video_clip(video_path: Path, overlay_path: Path, out: Path, secs: float, real_duration: float):
+    # If uploaded footage is shorter than the scene, freeze last frame; always remove original audio.
+    # scale+crop: avoid black bars, leave source media fullscreen.
+    vf=f'[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1,format=yuv420p[base];[base][1:v]overlay=shortest=1:format=auto,format=yuv420p'
+    frames=round(secs*FPS)
+    ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-stream_loop','-1','-i',str(video_path),'-loop','1','-i',str(overlay_path),
+            '-filter_complex',vf,'-frames:v',str(frames),'-r',str(FPS),'-an','-c:v','libx264','-preset','ultrafast',
+            '-crf','25','-pix_fmt','yuv420p',str(out)],timeout=155)
+
+
+def still_clip(png: Path, out: Path, secs: float):
+    ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-loop','1','-framerate',str(FPS),'-i',str(png),
+            '-t',str(secs),'-vf',f'fps={FPS},format=yuv420p','-an','-c:v','libx264','-preset','ultrafast','-crf','25',
+            '-pix_fmt','yuv420p',str(out)],timeout=85)
+
+
+def generate_video(job_id: str, media: list[dict[str, Any]], opts: dict, logo_path: Path | None, audio_path: Path | None):
+    directory=TMP_ROOT/job_id
+    try:
         with lock:
-            jobs[job_id]['state'] = 'working'
-            jobs[job_id]['message'] = 'Przygotowuję kadry…'
-            jobs[job_id]['progress'] = 5
-        logo = None
+            jobs[job_id].update(state='working',message='Układam sceny…',progress=4)
+        logo=None
         if logo_path:
             with Image.open(logo_path) as im:
-                logo = ImageOps.exif_transpose(im).convert('RGBA').copy()
-        segments = []
-        dur = 1.55 if opts['pace']=='fast' else 2.25
-        n = len(input_photos)
-        for i, src in enumerate(input_photos):
-            slide = directory / f'slide-{i:02d}.png'
-            clip = directory / f'clip-{i:02d}.mp4'
-            scene(src, slide, pal, opts['title'], opts['brand'], opts['subtitle'], i+1, n, logo)
-            render_clip(slide, clip, dur, motion=True)
-            segments.append(clip)
+                logo=ImageOps.exif_transpose(im).convert('RGBA').copy()
+        total=float(opts['length'])
+        end_length=1.8
+        secs=(total-end_length)/len(media)
+        clips=[]
+        last_still=None
+        for index,entry in enumerate(media):
+            overlay=directory/f'overlay-{index:02}.png'
+            subtitle_overlay(overlay,style=opts['style'],caption=entry['caption'],detail=entry['detail'],brand=opts['brand'],idx=index+1,count=len(media),logo=logo)
+            clip=directory/f'clip-{index:02}.mp4'
+            if entry['type']=='photo':
+                photo_clip(entry['path'],overlay,clip,secs,opts['style'],index)
+                last_still=entry['path']
+            else:
+                video_clip(entry['path'],overlay,clip,secs,entry['duration'])
+                frame=directory/f'last-video-frame-{index:02}.png'
+                grab_frame(entry['path'],frame)
+                last_still=frame
+            clips.append(clip)
             with lock:
-                jobs[job_id]['progress'] = min(87, 8 + round((i+1)/n*75))
-                jobs[job_id]['message'] = f'Montuję ujęcie {i+1} z {n}…'
-        end_slide = directory / 'ending.png'
-        end_clip = directory / 'clip-end.mp4'
-        ending(end_slide, pal, opts['title'], opts['brand'], opts['cta'], logo)
-        render_clip(end_slide, end_clip, 1.5, motion=False)
-        segments.append(end_clip)
-        concat_txt = directory / 'playlist.txt'
-        concat_txt.write_text(''.join("file '"+str(p)+"'\n" for p in segments), encoding='utf8')
-        silent = directory / 'silent.mp4'
-        ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',str(concat_txt),
-                '-c','copy','-movflags','+faststart',str(silent)], timeout=90)
-        out = directory / 'reelagent.mp4'
+                jobs[job_id].update(message=f'Montuję scenę {index+1} z {len(media)}…',progress=round(8+78*(index+1)/len(media)))
+        outro=directory/'outro.png'
+        ending_png(outro,last_still,brand=opts['brand'],cta=opts['cta'],style=opts['style'],logo=logo)
+        outro_clip=directory/'outro.mp4'
+        still_clip(outro,outro_clip,end_length)
+        clips.append(outro_clip)
+        playlist=directory/'playlist.txt'
+        playlist.write_text(''.join("file '"+str(c)+"'\n" for c in clips),encoding='utf8')
+        silent=directory/'silent.mp4'
+        ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-f','concat','-safe','0','-i',str(playlist),
+                '-c','copy','-movflags','+faststart',str(silent)],timeout=100)
+        final=directory/'reelagent.mp4'
         if audio_path:
             with lock:
-                jobs[job_id]['message'] = 'Dodaję muzykę…'
-                jobs[job_id]['progress'] = 93
-            total_duration = n*dur + 1.5
-            fade_start = max(0, total_duration - 0.7)
+                jobs[job_id].update(message='Dodaję muzykę…',progress=94)
+            fade=max(0,total-.65)
             ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(silent),'-stream_loop','-1','-i',str(audio_path),
                     '-map','0:v:0','-map','1:a:0','-c:v','copy','-c:a','aac','-b:a','128k',
-                    '-af',f'afade=t=out:st={fade_start:.3f}:d=0.7','-t',f'{total_duration:.3f}',
-                    '-movflags','+faststart',str(out)], timeout=100)
+                    '-af',f'afade=t=out:st={fade:.2f}:d=0.65','-t',f'{total:.3f}',
+                    '-movflags','+faststart',str(final)],timeout=100)
         else:
-            shutil.copy2(silent, out)
+            shutil.copy2(silent,final)
         with lock:
-            jobs[job_id].update({'state':'ready','progress':100,'message':'Film gotowy!',
-                                 'duration':round(n*dur+1.5, 1), 'bytes':out.stat().st_size})
-        # Remove user originals and intermediate assets; retain final for short preview window.
-        for p in directory.iterdir():
-            if p != out:
-                try: p.unlink()
-                except OSError: pass
+            jobs[job_id].update(state='ready',message='Gotowa rolka!',progress=100,
+                                duration=round(len(media)*secs+end_length,1),bytes=final.stat().st_size)
+        for file in directory.iterdir():
+            if file != final:
+                file.unlink(missing_ok=True)
     except Exception as exc:
-        logger.exception('Render failed for job %s', job_id)
+        logger.exception('Job %s failed',job_id)
         with lock:
-            jobs[job_id].update({'state':'error','message':str(exc)[:420]})
-        shutil.rmtree(directory, ignore_errors=True)
+            jobs[job_id].update(state='error',message=str(exc)[:300])
+        shutil.rmtree(directory,ignore_errors=True)
 
 
 def cleanup():
-    now = time.time()
+    now=time.time()
     with lock:
-        expired = [key for key, val in jobs.items() if val['state'] != 'working' and now-val['created'] > MAX_AGE]
-        for key in expired:
-            jobs.pop(key, None)
-    for key in expired:
-        shutil.rmtree(TMP_ROOT/key, ignore_errors=True)
+        expired=[key for key,val in jobs.items() if val['state'] not in ('working','queued') and now-val['created']>EXPIRE_SECONDS]
+        for key in expired: jobs.pop(key,None)
+    for key in expired: shutil.rmtree(TMP_ROOT/key,ignore_errors=True)
 
 
 @app.get('/')
 def home():
-    return FileResponse(BASE / 'static' / 'index.html', media_type='text/html')
+    return FileResponse(BASE/'static'/'index.html',media_type='text/html')
 
 
 @app.get('/api/health')
 def health():
-    return {'ok':True, 'version':'1.0'}
+    return {'ok':True,'version':'2.0','video':True,'safe_zone':SAFE}
 
 
 @app.post('/api/jobs')
 async def create_job(request: Request,
-                     photos: list[UploadFile] = File(...),
-                     brand: str = Form('Moja marka'),
-                     title: str = Form('Zobacz naszą historię'),
-                     subtitle: str = Form('Małe rzeczy robią różnicę'),
+                     media: list[UploadFile] = File(...),
+                     scene_text: str = Form('[]'),
+                     brand: str = Form('Churreria Mundo'),
                      cta: str = Form('Wpadaj do nas!'),
-                     theme: str = Form('cafe'),
-                     pace: str = Form('fast'),
+                     style: str = Form('film'),
+                     length: int = Form(15),
                      pin: str = Form(''),
                      audio: UploadFile | None = File(None),
                      logo: UploadFile | None = File(None)):
     cleanup()
-    required_pin = os.getenv('APP_PIN','').strip()
-    if required_pin and pin != required_pin:
-        raise HTTPException(403, 'Nieprawidłowy kod dostępu.')
-    if theme not in THEMES or pace not in ('fast','calm'):
-        raise HTTPException(400, 'Nieprawidłowy styl lub tempo.')
-    if not MIN_PHOTOS <= len(photos) <= MAX_PHOTOS:
-        raise HTTPException(400, 'Dodaj od 2 do 8 zdjęć.')
-    with lock:
-        active = sum(1 for j in jobs.values() if j['state'] in ('queued','working'))
-        if active >= 2:
-            raise HTTPException(429, 'Generator jest zajęty. Spróbuj ponownie za chwilę.')
-    data = {'brand':brand.strip()[:50] or 'Moja marka', 'title':title.strip()[:75] or 'Zobacz nasze zdjęcia',
-            'subtitle':subtitle.strip()[:100], 'cta':cta.strip()[:80] or 'Do zobaczenia!',
-            'theme':theme, 'pace':pace}
-    job_id = uuid.uuid4().hex
-    directory = TMP_ROOT/job_id
-    directory.mkdir(mode=0o700)
-    paths = []
-    total = 0
-
-    async def save_upload(up: UploadFile, name: str, max_bytes: int) -> Path:
-        nonlocal total
-        dest = directory/name
-        amount = 0
-        with dest.open('wb') as f:
-            while chunk := await up.read(1024 * 1024):
-                amount += len(chunk)
-                total += len(chunk)
-                if amount > max_bytes or total > MAX_BYTES_TOTAL:
-                    raise HTTPException(413, 'Pliki są za duże. Wybierz mniejsze zdjęcia.')
-                f.write(chunk)
-        if amount == 0:
-            raise HTTPException(400,'Pusty plik.')
-        return dest
-
-    def verify_image(p: Path):
-        try:
-            with Image.open(p) as im:
-                im.verify()
-            with Image.open(p) as im:
-                w,h=im.size
-                if w*h > 40_000_000 or min(w,h) < 100:
-                    raise HTTPException(400,'Zdjęcie ma nieodpowiednie wymiary.')
-        except HTTPException:
-            raise
-        except (UnidentifiedImageError, OSError, ValueError):
-            raise HTTPException(400,'Nie udało się odczytać jednego ze zdjęć. Spróbuj JPG albo PNG.')
-
+    import hmac
+    required=os.getenv('APP_PIN','').strip()
+    if required and not hmac.compare_digest(pin,required):
+        raise HTTPException(403,'Nieprawidłowy kod dostępu.')
+    if style not in STYLES or length not in (10,15,20):
+        raise HTTPException(400,'Wybierz poprawny szablon i długość.')
+    if not MIN_MEDIA <= len(media) <= MAX_MEDIA:
+        raise HTTPException(400,'Dodaj od 2 do 8 zdjęć lub filmów.')
     try:
-        for i, upload in enumerate(photos):
-            p = await save_upload(upload, f'photo-{i:02d}.input', MAX_BYTES_PER_IMAGE)
-            verify_image(p)
-            paths.append(p)
-        audio_path = None
-        if audio and audio.filename:
-            if Path(audio.filename).suffix.lower() not in ('.mp3','.m4a','.wav','.aac'):
-                raise HTTPException(400, 'Muzyka: wybierz MP3, WAV lub M4A.')
-            audio_path = await save_upload(audio, 'audio.input', MAX_AUDIO_BYTES)
-        logo_path = None
+        texts=json.loads(scene_text)
+        if not isinstance(texts,list) or len(texts)!=len(media): raise ValueError()
+        for entry in texts:
+            if not isinstance(entry,dict): raise ValueError()
+            if not isinstance(entry.get('caption',''),str) or not isinstance(entry.get('detail',''),str): raise ValueError()
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise HTTPException(400,'Nieprawidłowe napisy scen.')
+    with lock:
+        if sum(1 for x in jobs.values() if x['state'] in ('queued','working'))>=2:
+            raise HTTPException(429,'Generator jest zajęty. Spróbuj za chwilę.')
+    job_id=uuid.uuid4().hex
+    directory=TMP_ROOT/job_id
+    directory.mkdir(mode=0o700)
+    total_bytes=0
+    async def save(up: UploadFile,name: str, cap: int):
+        nonlocal total_bytes
+        path=directory/name; consumed=0
+        with path.open('wb') as fp:
+            while chunk := await up.read(1024*1024):
+                consumed+=len(chunk);total_bytes+=len(chunk)
+                if consumed>cap or total_bytes>MAX_TOTAL:
+                    raise HTTPException(413,'Za duże pliki. Zmniejsz zdjęcia lub wybierz krótsze filmy.')
+                fp.write(chunk)
+        if not consumed: raise HTTPException(400,'Jeden z plików jest pusty.')
+        return path
+    try:
+        clips=[]
+        for i,up in enumerate(media):
+            ext=Path(up.filename or '').suffix.lower()
+            mimetype=(up.content_type or '').lower()
+            is_video=ext in ('.mp4','.mov','.m4v','.webm') or mimetype.startswith('video/')
+            if is_video and ext not in ('.mp4','.mov','.m4v','.webm'):
+                raise HTTPException(400,'Wideo: użyj MP4, MOV lub WEBM.')
+            dest=await save(up,f'asset-{i:02}.input',MAX_VIDEO if is_video else MAX_IMAGE)
+            if is_video:
+                d=video_meta(dest);kind='video'
+            else:
+                photo_meta(dest);d=0;kind='photo'
+            clips.append({'path':dest,'type':kind,'duration':d,
+                          'caption':texts[i].get('caption','').strip()[:72],
+                          'detail':texts[i].get('detail','').strip()[:100]})
+        logo_path=None
         if logo and logo.filename:
-            logo_path = await save_upload(logo, 'logo.input', MAX_BYTES_PER_IMAGE)
-            verify_image(logo_path)
+            logo_path=await save(logo,'logo.input',MAX_IMAGE)
+            photo_meta(logo_path)
+        audio_path=None
+        if audio and audio.filename:
+            if Path(audio.filename).suffix.lower() not in ('.mp3','.wav','.m4a','.aac'):
+                raise HTTPException(400,'Muzyka musi być MP3, WAV lub M4A.')
+            audio_path=await save(audio,'audio.input',MAX_AUDIO)
+        opts={'brand':brand.strip()[:50] or 'Moja marka','cta':cta.strip()[:78] or 'Do zobaczenia!',
+              'style':style,'length':length}
         with lock:
-            jobs[job_id] = {'state':'queued','message':'Czekam na montaż…','progress':0,'created':time.time()}
-        pool.submit(generate_video,job_id,paths,data,audio_path,logo_path)
+            jobs[job_id]={'state':'queued','message':'Czekam na montaż…','progress':0,'created':time.time()}
+        pool.submit(generate_video,job_id,clips,opts,logo_path,audio_path)
         return {'id':job_id}
     except Exception:
-        shutil.rmtree(directory, ignore_errors=True)
+        shutil.rmtree(directory,ignore_errors=True)
         raise
 
 
@@ -379,25 +425,23 @@ async def create_job(request: Request,
 def get_job(job_id: str):
     cleanup()
     with lock:
-        job = jobs.get(job_id)
-        if job is None:
-            raise HTTPException(404,'Film wygasł albo nie istnieje.')
+        job=jobs.get(job_id)
+        if not job: raise HTTPException(404,'Film wygasł lub zadanie nie istnieje.')
         return {k:v for k,v in job.items() if k!='created'}
 
 
 @app.get('/api/jobs/{job_id}/video')
-def get_video(job_id: str, download: int = 0):
+def get_video(job_id: str,download: int=0):
     cleanup()
     with lock:
-        job = jobs.get(job_id)
-        if not job or job['state'] != 'ready':
-            raise HTTPException(404,'Film nie jest jeszcze gotowy.')
-    p=TMP_ROOT/job_id/'reelagent.mp4'
-    if not p.exists():
-        raise HTTPException(404,'Plik już wygasł.')
-    return FileResponse(p, media_type='video/mp4', filename='moja-rolka.mp4', content_disposition_type='attachment' if download else 'inline')
+        job=jobs.get(job_id)
+        if not job or job['state']!='ready': raise HTTPException(404,'Film nie jest gotowy.')
+    path=TMP_ROOT/job_id/'reelagent.mp4'
+    if not path.exists(): raise HTTPException(404,'Film nie jest już dostępny.')
+    return FileResponse(path,media_type='video/mp4',filename='reelagent-rolka.mp4',
+                        content_disposition_type='attachment' if download else 'inline')
 
 
 @app.exception_handler(413)
-async def too_large(request: Request, exc: HTTPException):
-    return JSONResponse(status_code=413, content={'detail':exc.detail})
+async def too_large(request: Request,exc: HTTPException):
+    return JSONResponse(status_code=413,content={'detail':exc.detail})
