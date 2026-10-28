@@ -8,3 +8,63 @@
 /* Decorative glows must not enlarge the page on small phones. */
 html{overflow-x:clip}
 .glow{position:fixed}
+
+/* ReelAgent 2.3 — small, mobile friendly director + recorder controls */
+.director-panel{background:linear-gradient(150deg,#2b2440,#162a30);border:1px solid #646090;border-radius:14px;padding:16px;margin-top:18px}
+.director-title{display:flex;justify-content:space-between;gap:8px;align-items:center}.director-title strong{font-size:15px}.director-title span{font-size:10px;color:#a7f0d7}
+.director-panel p{font-size:12px;color:#bcc5d7;line-height:1.55;margin:8px 0}
+.director-panel .helper{font-size:10px;color:#9cabbd}
+.director-toggle{display:flex;align-items:center;gap:9px;font-size:12px;margin:13px 0;color:#fff}.director-toggle input{width:17px;height:17px;accent-color:#ac95ff}
+.director-actions{display:flex;flex-wrap:wrap;gap:8px}.director-actions button,.record-btn,.camera-controls button{background:#36374f;color:#f5f2ff;border:1px solid #79739e;border-radius:9px;padding:10px;font-size:12px;font-weight:700}
+.director-actions button:disabled{opacity:.55}.director-status{font-size:11px!important;color:#9be4c8!important}
+.recorder-actions{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-top:11px}.record-btn{background:#583249;border-color:#a96b8c}.record-btn:disabled{opacity:.5}#record-status{font-size:11px;color:#aeb7cb}
+.camera-panel{margin-top:11px;padding:11px;border:1px solid #4a5270;background:#0d1420;border-radius:13px}.camera-panel video{display:block;max-height:350px;width:100%;object-fit:contain;background:black;border-radius:8px}.camera-controls{display:flex;flex-wrap:wrap;gap:9px;margin-top:9px}.camera-controls button:first-child{background:#bd4f76;border-color:#e67caa}#record-countdown{color:#ffb0c3;font-weight:750;text-align:center}
+.ai-label{font-size:10px;display:block;color:#a6e7cd;margin-top:4px}
+@media(max-width:710px){.director-actions button{flex:1;min-width:125px}}
+
+.save-brand-btn{background:transparent;border:1px dashed #9d8cb8;color:#e5d5ff;border-radius:8px;padding:9px;margin-top:10px;font-size:11px;font-weight:700;width:100%}
+
+/* ReelAgent 2.4 — three lightweight storyboard previews, one final MP4. */
+.live-preview{position:absolute;inset:0;overflow:hidden;background:#151821;touch-action:pan-y;user-select:none}
+.preview-media{position:absolute;inset:0;overflow:hidden}
+.preview-media img,.preview-media video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#151821}
+.live-preview .preview-media video{object-fit:cover;background:#151821}
+.live-copy{position:absolute;top:17.4%;left:9.5%;width:64%;height:52%;color:#fff;pointer-events:none;text-align:left}
+.copy-brand{position:absolute;top:0;left:0;max-width:100%;font-size:clamp(9px,2.6vw,11px);line-height:1.3;font-weight:650;text-shadow:0 1px 3px #000b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.copy-rule{position:absolute;top:19%;left:0;width:18%;height:3px;border-radius:12px;background:#f4be7c}
+.copy-title{position:absolute;top:25%;left:0;width:100%;font-size:clamp(14px,5vw,20px);line-height:1.15;font-weight:800;text-shadow:0 2px 3px #000e,0 0 7px #0008;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.copy-detail{position:absolute;top:58%;left:0;width:100%;font-size:clamp(10px,3vw,12px);line-height:1.3;font-weight:500;text-shadow:0 2px 5px #000f,0 0 7px #0008;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.copy-counter{position:absolute;top:17%;left:0;color:#6eebcd;font-size:10px;font-weight:800}
+.live-preview[data-style="dynamic"] .copy-rule{height:5px;width:23%;background:#ff6f91}
+.live-preview[data-style="dynamic"] .copy-title{font-size:clamp(16px,5.5vw,22px);font-weight:900}
+.live-preview[data-style="story"] .copy-rule{top:30%;width:15%;background:#6eebcd}
+.live-preview[data-style="story"] .copy-title{top:40%}
+.live-preview[data-style="story"] .copy-detail{top:75%}
+.live-outro{position:absolute;inset:-25px;background-position:center;background-size:cover;filter:blur(11px)}
+.live-outro-text{position:absolute;top:33%;left:9.7%;width:62%;color:#fff;text-shadow:0 2px 7px #000b;pointer-events:none}
+.outro-rule{height:3px;width:26%;background:#f4be7c;border-radius:4px;margin-bottom:25px}
+.live-preview[data-style="dynamic"] .outro-rule{background:#ff6f91}
+.live-preview[data-style="story"] .outro-rule{background:#6eebcd}
+.outro-brand{font-size:clamp(16px,5.3vw,23px);font-weight:820;line-height:1.18;overflow-wrap:anywhere;margin-bottom:18px}
+#live-cta{font-size:clamp(12px,3.3vw,14px);line-height:1.35;overflow-wrap:anywhere}
+.variant-navigator{margin:16px auto 4px;max-width:330px}
+.variant-swipe-label{text-align:center;color:#b7aaff;font-size:11px;font-weight:730;margin-bottom:9px}
+.variant-arrows{display:flex;align-items:center;justify-content:center;gap:15px;margin-bottom:10px}
+.variant-arrows>button{height:37px;width:37px;display:grid;place-items:center;background:#2f3449;color:#fff;border:1px solid #5b617c;border-radius:50%;font-size:27px;line-height:1}
+.variant-dots{display:flex;gap:8px;align-items:center}
+.variant-dot{width:9px;height:9px;padding:0;background:#566075;border:0;border-radius:12px;transition:width .2s,background .2s}
+.variant-dot.active{width:25px;background:#bbabff}
+.variant-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.variant-tab{min-width:0;padding:9px 5px 8px;background:#252d3d;border:1px solid #4a5266;border-radius:10px;color:#cbd1df;display:grid;gap:2px;text-align:center}
+.variant-tab strong{font-size:11px;white-space:nowrap}
+.variant-tab small{font-size:9px;color:#aab4c6;white-space:nowrap}
+.variant-tab.active{border-color:#c9b3ff;background:#35304d;color:#fff;box-shadow:0 0 0 1px #897baf inset}
+.variant-details{text-align:center;display:grid;gap:3px;margin:13px auto 10px;color:#d3dbea;font-size:12px}
+.variant-details strong{color:#fff;font-size:14px}.variant-details span{font-size:11px;color:#aeb9cd}
+.preview-play-controls{display:flex;align-items:center;gap:8px;margin:11px auto 8px}
+.preview-play-controls button{padding:7px 9px;border-radius:7px;background:#32394b;border:1px solid #515a72;color:#fff;font-size:11px;white-space:nowrap}
+.preview-play-controls input{width:100%;min-width:0;accent-color:#bcafff}
+.preview-play-controls span{font-size:10px;min-width:28px;font-variant-numeric:tabular-nums;color:#b7c1d3}
+.preview-disclaimer{margin:5px 0 14px;text-align:center;font-size:10px;color:#9eacc1;line-height:1.5}
+.render-selected{width:100%;margin-top:5px}
+@media(max-width:710px){.live-copy .copy-title{font-size:19px}.live-preview[data-style="dynamic"] .copy-title{font-size:20px}.live-copy .copy-detail{font-size:12px}}

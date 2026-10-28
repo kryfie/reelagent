@@ -1,68 +1,59 @@
-# ReelAgent 2.0 — zdjęcia / krótkie filmy → rolka MP4
+# ReelAgent 2.4 — trzy propozycje, jeden eksport
 
-Nowa wersja poprzedniego ReelAgent Starter. Strona na telefon i komputer: wgrywasz od 2 do 8 zdjęć **lub filmów**, edytujesz **dwa napisy dla każdej sceny**, zmieniasz kolejność strzałkami, wybierasz jeden z trzech stylów i długość **10 / 15 / 20 sekund**, po czym otrzymujesz pionowy MP4 540×960, 20 fps (H.264) do obejrzenia, pobrania i udostępnienia.
+Działająca aktualizacja ReelAgent 2.3 dla obecnego repozytorium GitHub i jednej usługi Render. Własne materiały fotograficzne i krótkie nagrania -> trzy podglądy -> wybór -> MP4.
 
-## Najważniejsza nowość: napisy poza ikonami TikToka i Instagrama
+## Co nowego
 
-Wszystkie generowane przez ReelAgent napisy — główne, dodatkowe, nazwa marki i końcowe CTA — są rysowane **wyłącznie w zachowawczej strefie centralnej**. Przy rozdzielczości 540×960 to prostokąt od **x = 38 do 404 px, y = 150 do 670 px**. Nie dodajemy tekstu w obszarze przycisków po prawej stronie (x >= 414 px), przy opisie na dole (y >= 690 px) ani w górnym pasku (y < 145 px). Przycisk „Pokaż strefę TikToka i Instagrama” w podglądzie pokazuje orientacyjne marginesy — ten przewodnik **nie jest renderowany w MP4**.
+- **Filmowy, Dynamiczny, Historia:** trzy osobne plany montażu na podstawie tych samych materiałów, utworzone jednocześnie.
+- **Podgląd w przeglądarce** bez renderowania trzech MP4; lokalne zdjęcia, oryginalne wideo, kolejność/tempo scen, napisy i przybliżenia. Nie jest to jeszcze gotowy plik.
+- **Przesuwanie palcem w poziomie** na podglądzie + strzałki, kropki i trzy widoczne przyciski. Jest też Play/Pause i przewijanie.
+- **Tylko wybrany wariant** jest wysyłany na Render i eksportowany jako MP4 540 × 960 po kliknięciu „Wybieram ten wariant — wygeneruj MP4”.
+- Ożywione napisy (płynne wejście), kilka delikatnych akcentów graficznych zależnych od stylu, bez wielkich szarych tablic; zachowana bezpieczna strefa.
+- Zachowane opcjonalne Florence-2, nagrywanie pięciosekundowe, zmiana tekstów scen, logo i muzyka, pamięć marki oraz `APP_PIN`.
 
-Uwaga: interfejs obu platform, format publikacji i nakładki reklamowe zmieniają się. Nie ma jednego oficjalnego prostokąta gwarantującego całkowitą widoczność na każdym urządzeniu; sprawdź także podgląd w TikToku / Instagramie przed publikacją. Tekst obecny **na zdjęciu wgranym przez użytkownika** nie jest przenoszony ani usuwany. Bezpieczna strefa obejmuje tylko tekst dodawany przez aplikację.
+**Ważne:** podgląd jest szybkim przybliżeniem końcowego montażu. Efektów FFmpeg (dokładny zoom, fonty, klatki źródłowe, intro napisów, plansza końcowa) nie da się idealnie odwzorować w DOM; końcowy MP4 może się nieco różnić. Podgląd nie odtwarza wgranej ścieżki dźwiękowej; końcowy eksport ją dodaje.
 
-## Trzy style montażu
+## Aktualizacja (bez nowej usługi Render)
 
-- **Filmowy:** przybliżenia, spokojne ruchy, ciepłe kolory, prosty panel typograficzny.
-- **Dynamiczny:** bardziej energiczny ruch kadru, większy kontrast i mocny napis.
-- **Historia:** kolejne ujęcia jako sceny opowieści, numery scen, spokojniejsza oprawa.
+1. Pobierz ZIP i rozpakuj.
+2. Skopiuj **zawartość** folderu do obecnego lokalnego repozytorium ReelAgent, nadpisując pliki. Dodaj nowy `static/variants.js` i zaktualizowany `app.py`.
+3. W GitHub Desktop zrób **Commit** i **Push**.
+4. Przy włączonym Auto-Deploy Render wdroży nową wersję. Używaj dotychczasowego adresu i `APP_PIN` z Render → Environment.
+5. Odśwież stronę telefonu (w razie potrzeby zamknij starą kartę i otwórz ponownie).
 
-Wideo MP4/MOV/WEBM jest używane jako rzeczywiste **ruchome ujęcie**; ścieżka dźwiękowa oryginalnych nagrań jest wyciszana, aby uniknąć przypadkowego miksu. Można dodać jeden własny podkład muzyczny MP3/M4A/WAV, do którego posiadasz prawa. Krótkie wideo jest zapętlane na czas sceny. Zdjęcia są delikatnie panoramowane i przybliżane w FFmpeg. **Nie jest to generowanie nowych ruchomych scen przez model AI** — do tego potrzeba osobnej integracji i zasobów.
+Nie potrzeba nowych zmiennych środowiskowych ani dodatkowych usług API. Nadal obowiązuje opłata za Twój istniejący plan Render (~7 USD miesięcznie), a przy dużym ruchu mogą pojawić się ograniczenia zasobów / dodatkowe koszty.
 
-## Aktualizacja istniejącej usługi Render (Starter 7 USD)
+## Wymagania i ograniczenia
 
-**Nie zakładaj kolejnej płatnej usługi Render.** Skorzystaj z już istniejącego repozytorium i Web Service ReelAgent:
+- 2–8 materiałów; zdjęcie do **8 MB**, wideo do **15 MB** i **8 sekund**, całość do **60 MB**. Własne nagrywanie: **5 sekund**.
+- Limity sprawdzane na froncie i ponownie na serwerze. Nie wgrywaj długich nagrań do publicznej aplikacji. Dla eksportu wymagany jest kod, jeśli ustawiono `APP_PIN`.
+- Wszystkie zdjęcia i nagrania służą do eksportu jednego wariantu. **Nie dodawaj materiałów klientów do publicznego repozytorium.**
+- Pliki są przechowywane tymczasowo, a wynik dostępny do ~1 godziny. Restart usługi Render może przerwać trwające zadania.
+- Trzy podglądy wykorzystują zasoby *urządzenia użytkownika*, a nie trzy oddzielne rendery na serwerze. Na starszym telefonie przełączanie filmów może być mniej płynne.
+- Generowanie nowych realistycznych scen image-to-video nie jest częścią tej wersji. Opcjonalna analiza Florence-2 nadal zależy od zgodności urządzenia.
 
-1. Rozpakuj `reelagent-v2.zip` na komputerze.
-2. Skopiuj **pliki znajdujące się wewnątrz folderu projektu** do katalogu **obecnego** repozytorium ReelAgent i zastąp pliki wersji 1.0. `Dockerfile` i `app.py` mają leżeć w głównym katalogu repozytorium, katalog `static/` obok nich.
-3. Zrób commit i push przez GitHub Desktop.
-4. Render automatycznie zbuduje nową wersję, jeśli masz połączony GitHub i Auto-Deploy; w innym razie kliknij **Manual Deploy → Deploy latest commit**.
-5. Otwórz **swój dotychczasowy adres** `*.onrender.com`. W razie wyświetlania starego UI odśwież stronę.
-6. **Nie zmieniaj `APP_PIN`** ustawionego w Render → Environment. Wersja 2.0 używa tego samego pola kodu dostępu.
-7. Dodaj 3 zdjęcia lub 2 zdjęcia i 1 krótkie nagranie, popraw teksty przy scenach, wybierz szablon, kliknij **Wygeneruj rolkę**. Podgląd MP4 i pobranie/udostępnienie pojawią się po renderowaniu.
+## Weryfikacja
 
-Do istniejącej usługi nie potrzeba dodawania zmiennych środowiskowych ani tworzenia Blueprinta. Plik `render.yaml` jest pomocniczy i **nie należy uruchamiać z niego nowej instancji**, jeśli nie chcesz opłacać drugiej usługi.
+W środowisku z Pythonem, zależnościami i FFmpeg:
 
-### Zapis w Zdjęciach iPhone'a
-
-Na obsługiwanych iPhone'ach przycisk „Udostępnij / Zapisz w Zdjęciach” uruchamia systemowy arkusz udostępniania z plikiem MP4. Wybierz „Zachowaj wideo”, o ile Safari udostępnia tę opcję. Alternatywnie wybierz „Pobierz MP4”, potem aplikację Pliki → Udostępnij → Zachowaj wideo. Udostępnianie wymaga HTTPS (Render dostarcza HTTPS). Funkcji **nie testowano na fizycznym iPhonie**.
-
-## Limity wersji testowej
-
-- 2–8 zdjęć/krótkich filmów; do 8 materiałów łącznie.
-- Pojedynczy obraz max 12 MB; pojedynczy film max 55 MB; cały upload max 145 MB; opcjonalna muzyka max 15 MB.
-- Długość przesłanego filmu do 90 sekund, ale do rolki trafia tylko fragment o długości przypadającej na scenę.
-- Render Starter (0,5 CPU / 512 MB RAM) może działać powoli przy kilku filmach wejściowych i dużych plikach. To **prototyp, nie gotowy publiczny SaaS**.
-- Jeden render jednocześnie; maksymalnie dwa zadania oczekujące/aktywne; materiał w katalogu tymczasowym; gotowy MP4 dostępny przez ok. godzinę od utworzenia zadania. Pobierz od razu.
-- Kod można trzymać na publicznym GitHubie; **nie zapisuj tam prywatnych zdjęć, filmów, muzyki, kodów APP_PIN ani danych klientów.** Pliki użytkowników trafiają tymczasowo wyłącznie na serwer Render. Jeśli włączasz usługę publicznie, potrzebujesz pełniejszego zabezpieczenia dostępu i kontroli treści.
-- Nie jest wykorzystywane płatne API AI. Nie ma więc kosztu „za generację AI”, ale jest opłata za Twój plan Render i ewentualne dalsze koszty transferu/zasobów.
-
-## Lokalny test
-
-Wymagania: Python 3.11+, systemowy `ffmpeg` i `ffprobe` oraz czcionki DejaVu.
-
-```sh
+```bash
 pip install -r requirements.txt
-uvicorn app:app --host 127.0.0.1 --port 8000
+python tests/test_three_variants.py
+python tests/test_director.py
+python tests/test_limits.py
 ```
 
-Test automatyczny (sprawdza zdjęcia, wideo i faktyczny plik H.264 MP4):
+`tests/test_three_variants.py` potwierdza: trzy różne plany, poprawne czasy i indeksy, odrzucenie błędnych planów, **jeden** wybrany render oraz powstanie pliku MP4 o właściwej długości. Wykonano też test interfejsu 390×844: wybór kart, strzałki, kropki, podgląd i pasek postępu.
 
-```sh
-python tests/test_smoke.py
-```
+## Struktura
 
-## Układ projektu
+- `app.py` — API planów, limity przesyłania, renderowanie FFmpeg i pobieranie MP4
+- `director.py` — deterministyczny reżyser scen
+- `static/app.js` — formularz, pliki, nagrywanie, eksport
+- `static/variants.js` — trzy lekkie odtwarzane w przeglądarce propozycje i wybór
+- `static/index.html`, `static/style.css` — interfejs
+- `static/director-ai.js` — opcjonalna analiza Florence-2
 
-- `app.py`: FastAPI, walidacja, sceny, bezpieczny obszar tekstu, FFmpeg.
-- `static/index.html`, `static/style.css`, `static/app.js`: interfejs mobilny, napisy scen, wybór szablonu, podgląd, pobranie.
-- `Dockerfile`: instalacja FFmpeg, Pillow i zależności.
-- `render.yaml`: pomocnicza konfiguracja (nie używaj do tworzenia drugiej usługi).
-- `tests/test_smoke.py`: test renderowania dwóch wariantów.
+## Bezpieczeństwo
+
+Nie umieszczaj `APP_PIN` w publicznym GitHubie. Render → Environment → `APP_PIN` to prawidłowe miejsce. Repozytorium może być publiczne, ale zdjęcia użytkowników i pliki wideo nie mogą trafiać do commita ani publicznych artefaktów.

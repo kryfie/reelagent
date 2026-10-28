@@ -1,4 +1,4 @@
-"""ReelAgent 2.0 — photo/video to safe-zone vertical MP4.
+"""ReelAgent 2.4 — three browser previews, single full-quality export.
 
 Pilot for one trusted user. Runs native FFmpeg on Render; no paid AI API.
 Uploads and outputs are short-lived. Files are never committed to GitHub.
@@ -23,6 +23,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, UnidentifiedImageError
+from director import plan_scenes, role_from_caption
 
 try:
     from pillow_heif import register_heif_opener
@@ -35,17 +36,47 @@ TMP_ROOT = Path(os.environ.get('REEL_TMP_DIR', tempfile.gettempdir())) / 'reelag
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT, FPS = 540, 960, 20
 MAX_MEDIA, MIN_MEDIA = 8, 2
-MAX_IMAGE = 12 * 1024 * 1024
-MAX_VIDEO = 55 * 1024 * 1024
-MAX_AUDIO = 15 * 1024 * 1024
-MAX_TOTAL = 145 * 1024 * 1024
+MAX_IMAGE = 8 * 1024 * 1024
+MAX_VIDEO = 15 * 1024 * 1024
+MAX_VIDEO_DURATION = 8.0  # covers 5-second recordings plus brief existing clips
+MAX_AUDIO = 8 * 1024 * 1024
+MAX_TOTAL = 60 * 1024 * 1024
+MAX_REQUEST = 64 * 1024 * 1024  # including multipart headers and form fields
 EXPIRE_SECONDS = 3600
 # Conservative common safe zone for TikTok and Instagram overlays at 540x960:
 # RIGHT: x >= 414 excluded (buttons), BOTTOM: y >= 690 excluded (description),
 # TOP: y < 145 excluded (platform header). All rendered text stays inside.
 SAFE = (38, 150, 404, 670)
 
-app = FastAPI(title='ReelAgent 2.0', docs_url=None, redoc_url=None)
+app = FastAPI(title='ReelAgent 2.4', docs_url=None, redoc_url=None)
+@app.middleware('http')
+async def upload_request_limit(request: Request, call_next):
+    """Reject oversized bodies before multipart parsing, including chunked upload.
+
+    Limits only POST /api/jobs, never playback downloads or other requests.
+    """
+    if request.method != 'POST' or request.url.path != '/api/jobs':
+        return await call_next(request)
+    declared = request.headers.get('content-length')
+    if declared:
+        try:
+            if int(declared) > MAX_REQUEST:
+                return JSONResponse(status_code=413, content={'detail': 'Maksymalnie 60 MB materiałów na rolkę.'})
+        except ValueError:
+            return JSONResponse(status_code=400, content={'detail': 'Błędny Content-Length.'})
+    original_receive = request._receive
+    received = 0
+    async def bounded_receive():
+        nonlocal received
+        message = await original_receive()
+        if message['type'] == 'http.request':
+            received += len(message.get('body', b''))
+            if received > MAX_REQUEST:
+                raise HTTPException(413, 'Przesłane pliki są za duże (maks. 60 MB).')
+        return message
+    request._receive = bounded_receive
+    return await call_next(request)
+
 app.mount('/static', StaticFiles(directory=str(BASE / 'static')), name='static')
 pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='reel-render')
 lock = threading.Lock()
@@ -114,43 +145,81 @@ def logo_on(img: Image.Image, logo: Image.Image | None, x: int, y: int, max_side
     img.alpha_composite(im, (x, y))
 
 
-def subtitle_overlay(path: Path, *, style: str, caption: str, detail: str, brand: str, idx: int, count: int, logo: Image.Image | None):
-    """Only text within SAFE, regardless of style and image dimensions."""
-    pal=STYLES[style]
+def draw_float_text(draw: ImageDraw.ImageDraw, text: str, x: int, y: int, max_width: int,
+                    *, size: int, color=(255,255,255), limit: int = 3,
+                    gap: int = 8, bold: bool = True, tracking: int = 0) -> int:
+    """Editorial captions: NO opaque cards, only subtle shadow and a hairline outline.
+
+    The strong shadow keeps text legible on bright product photography without
+    sacrificing visual space to a giant grey rectangle.
+    """
+    face = font(size, bold)
+    lines = text_lines(draw, text, face, max_width, limit)
+    advance = size + gap
+    for i, line in enumerate(lines):
+        yy = y + i * advance
+        if not line: continue
+        draw.text((x+2, yy+3), line, font=face, fill=(0,0,0,190),
+                  stroke_width=3 if size >= 25 else 2, stroke_fill=(0,0,0,110))
+        draw.text((x, yy), line, font=face, fill=color,
+                  stroke_width=2 if size >= 27 else 1, stroke_fill=(0,0,0,185))
+    return y + len(lines) * advance
+
+
+def subtitle_overlay(path: Path, *, style: str, caption: str, detail: str, brand: str,
+                     idx: int, count: int, logo: Image.Image | None):
+    """No grey panels. Minimal type stays entirely in the conservative SAFE zone."""
+    pal = STYLES[style]
     fg, accent = pal['fg'], pal['accent']
-    layer=Image.new('RGBA',(WIDTH,HEIGHT),(0,0,0,0))
-    d=ImageDraw.Draw(layer,'RGBA')
-    left,top,right,bottom=SAFE
-    if style=='film':
-        # Floating editorial panel in central-left safe area.
-        d.rounded_rectangle((left,306,right,606),radius=21,fill=(12,10,10,160))
-        d.rounded_rectangle((left+20,333,left+65,338),radius=2,fill=accent+(255,))
-        draw_copy(d,caption,left+20,364,right-left-40,size=36,color=fg,limit=3,gap=10)
-        draw_copy(d,detail,left+20,523,right-left-40,size=19,color=(248,236,219),limit=2,gap=6,bold=False)
-    elif style=='dynamic':
-        d.rounded_rectangle((left,298,right,599),radius=15,fill=(16,9,26,196))
-        d.polygon([(left,298),(left+14,298),(left+14,599),(left,599)],fill=accent+(255,))
-        d.rounded_rectangle((left+23,319,left+168,355),radius=8,fill=accent+(255,))
-        d.text((left+34,325),'ZOBACZ TO',font=font(16,True),fill=(16,12,24))
-        draw_copy(d,caption,left+24,385,right-left-41,size=38,color=fg,limit=3,gap=8)
-        draw_copy(d,detail,left+24,523,right-left-41,size=19,color=(255,237,241),limit=2,gap=6,bold=False)
-    else: # story
-        d.rounded_rectangle((left,306,right,610),radius=22,fill=(8,24,29,185))
-        d.text((left+20,330),f'SCENA {idx:02d} / {count:02d}',font=font(17,True),fill=accent)
-        d.line((left+20,367,right-20,367),fill=accent+(185,),width=2)
-        draw_copy(d,caption,left+20,394,right-left-40,size=34,color=fg,limit=3,gap=8)
-        draw_copy(d,detail,left+20,527,right-left-40,size=19,color=(226,250,242),limit=2,gap=6,bold=False)
-    # Brand remains within the safe zone, never in app top bar.
-    d.rounded_rectangle((left,155,min(right,left+250),211),radius=17,fill=(0,0,0,155))
+    layer = Image.new('RGBA', (WIDTH, HEIGHT), (0,0,0,0))
+    d = ImageDraw.Draw(layer, 'RGBA')
+    left, top, right, bottom = SAFE
+    x = left + 14
+    max_width = right - x - 18
+
+    # Small, unobtrusive brand signature (instead of an opaque black pill).
+    brand_y = 173
     if logo:
-        logo_on(layer, logo, left+8,161,39)
-        name_x=left+55
+        logo_on(layer, logo, x, 167, 34)
+        brand_x = x + 44
     else:
-        name_x=left+13
-    brand_s=brand[:27]
-    brand_lines=text_lines(d,brand_s,font(17,True),right-name_x-12,1)
-    if brand_lines:
-        d.text((name_x,175),brand_lines[0],font=font(17,True),fill=fg)
+        brand_x = x
+    draw_float_text(d, brand[:36], brand_x, brand_y, right-brand_x-5,
+                    size=16, color=(255,255,255), limit=1, gap=2)
+
+    # Dynamic/Story captions have a distinct editorial treatment, without cards.
+    if style == 'film':
+        d.rounded_rectangle((x, 250, x+46, 254), radius=2, fill=accent+(255,))
+        # Minimal editorial corner: decorative, never a panel over the photo.
+        d.line((x, 264, x, 270), fill=accent+(190,), width=2)
+        cap_y = 274
+        size = 37
+        color = (255,255,255)
+    elif style == 'dynamic':
+        d.rounded_rectangle((x, 240, x+64, 246), radius=3, fill=accent+(255,))
+        for k in range(3):
+            d.rounded_rectangle((x+72+k*11, 240, x+78+k*11, 246), radius=1, fill=accent+(160-k*36,))
+        cap_y = 273
+        size = 39
+        color = (255,255,255)
+    else:
+        draw_float_text(d, f'{idx:02d}  /  {count:02d}', x, 240, max_width,
+                        size=16, color=accent, limit=1)
+        d.rounded_rectangle((x, 275, x+34, 279), radius=2, fill=accent+(255,))
+        cap_y = 296
+        size = 36
+        color = (255,255,255)
+
+    if caption.strip():
+        after_caption = draw_float_text(d, caption, x, cap_y, max_width,
+                                        size=size, color=color, limit=3, gap=8)
+    else:
+        after_caption = cap_y
+    if detail.strip():
+        detail_y = after_caption + (10 if caption.strip() else 0)
+        # Smaller, softer copy; it still has its own dark edge for readability.
+        draw_float_text(d, detail, x, detail_y, max_width,
+                        size=20, color=(250,244,233), limit=2, gap=7, bold=False)
     layer.save(path)
 
 
@@ -158,20 +227,27 @@ def grab_frame(input_path: Path, output_path: Path):
     ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-ss','0.2','-i',str(input_path),'-frames:v','1',str(output_path)],timeout=45)
 
 
-def ending_png(dest: Path, last_image: Path, *, brand: str, cta: str, style: str, logo: Image.Image | None):
-    pal=STYLES[style]
+def ending_png(dest: Path, last_image: Path, *, brand: str, cta: str,
+               style: str, logo: Image.Image | None):
+    """Cinematic photo-based outro without a floating opaque rectangle."""
+    pal = STYLES[style]
     with Image.open(last_image) as im:
-        photo=ImageOps.fit(ImageOps.exif_transpose(im).convert('RGB'),(WIDTH,HEIGHT),method=Image.Resampling.LANCZOS)
-    photo=photo.filter(ImageFilter.GaussianBlur(22))
-    shade=Image.new('RGBA',(WIDTH,HEIGHT),pal['bg']+(218,))
-    canvas=photo.convert('RGBA');canvas.alpha_composite(shade)
-    d=ImageDraw.Draw(canvas,'RGBA'); left,top,right,bottom=SAFE
-    d.rounded_rectangle((left,270,right,640),radius=24,fill=(0,0,0,105))
-    d.rounded_rectangle((left+20,302,left+75,307),radius=2,fill=pal['accent']+(255,))
-    if logo: logo_on(canvas,logo,left+20,328,57)
-    d=ImageDraw.Draw(canvas,'RGBA')
-    draw_copy(d,brand,left+20,405,right-left-40,size=32,color=pal['fg'],limit=2)
-    draw_copy(d,cta,left+20,516,right-left-40,size=25,color=pal['accent'],limit=3,gap=7)
+        photo = ImageOps.fit(ImageOps.exif_transpose(im).convert('RGB'),
+                             (WIDTH,HEIGHT), method=Image.Resampling.LANCZOS)
+    # Keep the product visible, but calm busy details behind the typography.
+    canvas = photo.filter(ImageFilter.GaussianBlur(11)).convert('RGBA')
+    tint = Image.new('RGBA', (WIDTH,HEIGHT), pal['bg']+(116,))
+    canvas.alpha_composite(tint)
+    d = ImageDraw.Draw(canvas, 'RGBA')
+    left, top, right, bottom = SAFE
+    x, max_width = left+15, right-left-38
+    d.rounded_rectangle((x, 305, x+58, 310),radius=2,fill=pal['accent']+(255,))
+    if logo:
+        logo_on(canvas,logo,x,335,52)
+    d = ImageDraw.Draw(canvas,'RGBA')
+    main_y=404 if logo else 365
+    after=draw_float_text(d,brand,x,main_y,max_width,size=36,color=pal['fg'],limit=2,gap=8)
+    draw_float_text(d,cta,x,after+24,max_width,size=24,color=(255,242,215),limit=3,gap=9)
     canvas.convert('RGB').save(dest,optimize=True)
 
 
@@ -194,11 +270,11 @@ def video_meta(path: Path):
         stream=data['streams'][0]
         duration=float(data['format']['duration'])
         width,height=int(stream['width']),int(stream['height'])
-        if not 0.5 <= duration <= 90 or not 150 <= width <= 3840 or not 150 <= height <= 3840:
+        if not 0.5 <= duration <= MAX_VIDEO_DURATION or not 150 <= width <= 4096 or not 150 <= height <= 4096:
             raise ValueError('Wymiary lub długość nieobsługiwane')
         return duration
     except (ValueError, KeyError, IndexError, TypeError):
-        raise HTTPException(400,'Film musi mieć od 0,5 do 90 sekund i rozdzielczość co najmniej 150 px.')
+        raise HTTPException(400,f'Film musi mieć od 0,5 do {MAX_VIDEO_DURATION:g} sekund (nie przyjmujemy długich nagrań).')
 
 
 def photo_meta(path: Path):
@@ -215,7 +291,7 @@ def photo_meta(path: Path):
         raise HTTPException(400,'Nie udało się odczytać zdjęcia. Użyj JPG, PNG, WEBP lub HEIC.')
 
 
-def photo_clip(photo_path: Path, overlay_path: Path, out: Path, secs: float, style: str, clip_idx: int):
+def photo_clip(photo_path: Path, overlay_path: Path, out: Path, secs: float, style: str, clip_idx: int, motion: str = "zoom_in"):
     """True camera movement on full-frame photograph, text fixed over moving image."""
     with Image.open(photo_path) as src:
         image=ImageOps.exif_transpose(src).convert('RGB')
@@ -225,15 +301,15 @@ def photo_clip(photo_path: Path, overlay_path: Path, out: Path, secs: float, sty
     frames=round(secs*FPS)
     # zoom and gentle pan in opposite directions; dynamic jumps between visual angles.
     if style=='dynamic':
-        z="max(1.03,1.13-on*0.0019)" if clip_idx%2 else "min(1.14,1.02+on*0.0025)"
+        z="max(1.03,1.13-on*0.0019)" if motion=='zoom_out' else "min(1.14,1.02+on*0.0025)"
     elif style=='story':
         z="min(1.09,1.01+on*0.0009)"
     else:
-        z="min(1.085,1.005+on*0.00075)"
-    pan_x = "iw/2-(iw/zoom/2)" if clip_idx%2==0 else "(iw-iw/zoom)*0.35"
+        z="max(1.03,1.09-on*0.00085)" if motion=='zoom_out' else "min(1.085,1.005+on*0.00075)"
+    pan_x = "iw/2-(iw/zoom/2)" if motion in ('zoom_in','zoom_out') else ("(iw-iw/zoom)*0.74" if motion=='pan_left' else "(iw-iw/zoom)*0.25")
     pan_y = "ih/2-(ih/zoom/2)"
     base=f"zoompan=z='{z}':x='{pan_x}':y='{pan_y}':d=1:s={WIDTH}x{HEIGHT}:fps={FPS},setsar=1[base]"
-    vf=f'[0:v]{base};[base][1:v]overlay=shortest=1,format=yuv420p'
+    vf=f'[0:v]{base};[1:v]format=rgba,fade=t=in:st=0:d=0.28:alpha=1[text];[base][text]overlay=shortest=1,format=yuv420p'
     try:
         ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-loop','1','-framerate',str(FPS),'-i',str(temp),'-loop','1','-i',str(overlay_path),
                 '-filter_complex',vf,'-frames:v',str(frames),'-r',str(FPS),'-an','-c:v','libx264','-preset','ultrafast','-crf','25',
@@ -245,7 +321,7 @@ def photo_clip(photo_path: Path, overlay_path: Path, out: Path, secs: float, sty
 def video_clip(video_path: Path, overlay_path: Path, out: Path, secs: float, real_duration: float):
     # If uploaded footage is shorter than the scene, freeze last frame; always remove original audio.
     # scale+crop: avoid black bars, leave source media fullscreen.
-    vf=f'[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1,format=yuv420p[base];[base][1:v]overlay=shortest=1:format=auto,format=yuv420p'
+    vf=f'[0:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},fps={FPS},setsar=1,format=yuv420p[base];[1:v]format=rgba,fade=t=in:st=0:d=0.28:alpha=1[text];[base][text]overlay=shortest=1:format=auto,format=yuv420p'
     frames=round(secs*FPS)
     ff_run(['ffmpeg','-hide_banner','-loglevel','error','-y','-stream_loop','-1','-i',str(video_path),'-loop','1','-i',str(overlay_path),
             '-filter_complex',vf,'-frames:v',str(frames),'-r',str(FPS),'-an','-c:v','libx264','-preset','ultrafast',
@@ -269,15 +345,18 @@ def generate_video(job_id: str, media: list[dict[str, Any]], opts: dict, logo_pa
                 logo=ImageOps.exif_transpose(im).convert('RGBA').copy()
         total=float(opts['length'])
         end_length=1.8
-        secs=(total-end_length)/len(media)
+        plan=plan_scenes(media, style=opts['style'], length=opts['length'],
+                         variant=opts['variant'], auto_director=opts['auto_director'])
         clips=[]
         last_still=None
-        for index,entry in enumerate(media):
+        for index,scene in enumerate(plan):
+            entry=media[scene['index']]
+            secs=scene['duration']
             overlay=directory/f'overlay-{index:02}.png'
             subtitle_overlay(overlay,style=opts['style'],caption=entry['caption'],detail=entry['detail'],brand=opts['brand'],idx=index+1,count=len(media),logo=logo)
             clip=directory/f'clip-{index:02}.mp4'
             if entry['type']=='photo':
-                photo_clip(entry['path'],overlay,clip,secs,opts['style'],index)
+                photo_clip(entry['path'],overlay,clip,secs,opts['style'],index,scene['motion'])
                 last_still=entry['path']
             else:
                 video_clip(entry['path'],overlay,clip,secs,entry['duration'])
@@ -310,7 +389,7 @@ def generate_video(job_id: str, media: list[dict[str, Any]], opts: dict, logo_pa
             shutil.copy2(silent,final)
         with lock:
             jobs[job_id].update(state='ready',message='Gotowa rolka!',progress=100,
-                                duration=round(len(media)*secs+end_length,1),bytes=final.stat().st_size)
+                                duration=round(total,1),bytes=final.stat().st_size)
         for file in directory.iterdir():
             if file != final:
                 file.unlink(missing_ok=True)
@@ -334,9 +413,63 @@ def home():
     return FileResponse(BASE/'static'/'index.html',media_type='text/html')
 
 
+@app.post('/api/director/plan')
+async def director_preview(request: Request):
+    try:
+        data = await request.json()
+        materials = data.get('media', [])
+        if not isinstance(materials, list) or not 2 <= len(materials) <= 8:
+            raise ValueError()
+        normalized=[]
+        for m in materials:
+            if not isinstance(m, dict) or m.get('type') not in ('photo', 'video'):
+                raise ValueError()
+            normalized.append({'type':m['type'],'ai_description':str(m.get('ai_description',''))[:350]})
+        st = data.get('style','film'); length = data.get('length',15)
+        variant = data.get('variant',0)
+        if st not in STYLES or length not in (10,15,20) or not isinstance(variant,int) or not 0<=variant<=12:
+            raise ValueError()
+        return {'scenes':plan_scenes(normalized,style=st,length=length,variant=variant,
+                                    auto_director=bool(data.get('auto_director',True)))}
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+        raise HTTPException(400,'Niepoprawny plan montażu.')
+
+
+@app.post('/api/director/plans')
+async def director_three_plans(request: Request):
+    """Build three *lightweight* storyboards. No uploads or video rendering.
+
+    The same plan_scenes() is used for the final MP4 render, ensuring that
+    playback in the browser and the exported edit use the same source order,
+    durations and camera modes.
+    """
+    try:
+        data = await request.json()
+        materials = data.get('media', [])
+        if not isinstance(materials, list) or not 2 <= len(materials) <= MAX_MEDIA:
+            raise ValueError()
+        normalized = []
+        for m in materials:
+            if not isinstance(m, dict) or m.get('type') not in ('photo', 'video'):
+                raise ValueError()
+            normalized.append({'type': m['type'], 'ai_description': str(m.get('ai_description', ''))[:350]})
+        length = data.get('length', 15)
+        if type(length) is not int or length not in (10, 15, 20):
+            raise ValueError()
+        auto = bool(data.get('auto_director', True))
+        return {'duration': length, 'outro_duration': 1.8, 'variants': [
+            {'id': name, 'variant': i, 'style': name,
+             'scenes': plan_scenes(normalized, style=name, length=length,
+                                   variant=i, auto_director=auto)}
+            for i, name in enumerate(('film', 'dynamic', 'story'))
+        ]}
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+        raise HTTPException(400, 'Niepoprawne dane do przygotowania trzech propozycji.')
+
+
 @app.get('/api/health')
 def health():
-    return {'ok':True,'version':'2.0','video':True,'safe_zone':SAFE}
+    return {'ok':True,'version':'2.4','video':True,'safe_zone':SAFE,'max_video_seconds':MAX_VIDEO_DURATION,'max_video_mb':15,'max_image_mb':8,'max_upload_mb':60}
 
 
 @app.post('/api/jobs')
@@ -347,6 +480,8 @@ async def create_job(request: Request,
                      cta: str = Form('Wpadaj do nas!'),
                      style: str = Form('film'),
                      length: int = Form(15),
+                     auto_director: bool = Form(False),
+                     variant: int = Form(0),
                      pin: str = Form(''),
                      audio: UploadFile | None = File(None),
                      logo: UploadFile | None = File(None)):
@@ -355,7 +490,7 @@ async def create_job(request: Request,
     required=os.getenv('APP_PIN','').strip()
     if required and not hmac.compare_digest(pin,required):
         raise HTTPException(403,'Nieprawidłowy kod dostępu.')
-    if style not in STYLES or length not in (10,15,20):
+    if style not in STYLES or length not in (10,15,20) or not (0 <= variant <= 12):
         raise HTTPException(400,'Wybierz poprawny szablon i długość.')
     if not MIN_MEDIA <= len(media) <= MAX_MEDIA:
         raise HTTPException(400,'Dodaj od 2 do 8 zdjęć lub filmów.')
@@ -365,6 +500,7 @@ async def create_job(request: Request,
         for entry in texts:
             if not isinstance(entry,dict): raise ValueError()
             if not isinstance(entry.get('caption',''),str) or not isinstance(entry.get('detail',''),str): raise ValueError()
+            if not isinstance(entry.get('ai_description',''),str) or len(entry.get('ai_description','')) > 400: raise ValueError()
     except (TypeError, ValueError, json.JSONDecodeError):
         raise HTTPException(400,'Nieprawidłowe napisy scen.')
     with lock:
@@ -400,7 +536,8 @@ async def create_job(request: Request,
                 photo_meta(dest);d=0;kind='photo'
             clips.append({'path':dest,'type':kind,'duration':d,
                           'caption':texts[i].get('caption','').strip()[:72],
-                          'detail':texts[i].get('detail','').strip()[:100]})
+                          'detail':texts[i].get('detail','').strip()[:100],
+                          'ai_description':texts[i].get('ai_description','').strip()[:350]})
         logo_path=None
         if logo and logo.filename:
             logo_path=await save(logo,'logo.input',MAX_IMAGE)
@@ -411,7 +548,7 @@ async def create_job(request: Request,
                 raise HTTPException(400,'Muzyka musi być MP3, WAV lub M4A.')
             audio_path=await save(audio,'audio.input',MAX_AUDIO)
         opts={'brand':brand.strip()[:50] or 'Moja marka','cta':cta.strip()[:78] or 'Do zobaczenia!',
-              'style':style,'length':length}
+              'style':style,'length':length,'auto_director':auto_director,'variant':variant}
         with lock:
             jobs[job_id]={'state':'queued','message':'Czekam na montaż…','progress':0,'created':time.time()}
         pool.submit(generate_video,job_id,clips,opts,logo_path,audio_path)

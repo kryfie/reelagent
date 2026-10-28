@@ -5,25 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0c101b">
   <meta name="description" content="Zamień swoje zdjęcia i nagrania w dynamiczną rolkę 9:16. Dodaj napisy do scen, wybierz styl, zapisz MP4 na telefonie.">
-  <title>ReelAgent 2.0 — Zrób rolkę po swojemu</title>
-  <link rel="stylesheet" href="/static/style.css?v=2.0">
+  <title>ReelAgent 2.4 — Zrób rolkę po swojemu</title>
+  <link rel="stylesheet" href="/static/style.css?v=2.4">
 </head>
 <body>
 <div class="glow glow-one"></div><div class="glow glow-two"></div>
 <header class="topbar container">
-  <div class="logo"><span class="logo-icon">✦</span><span>reel<span class="lighter">agent</span></span><span class="version">2.0</span></div>
+  <div class="logo"><span class="logo-icon">✦</span><span>reel<span class="lighter">agent</span></span><span class="version">2.4</span></div>
   <span class="header-note">Twoje małe studio wideo</span>
 </header>
 <main class="container">
   <section class="hero">
     <div class="eyebrow">REELAGENT STUDIO <span class="eyebrow-dot">•</span> 9:16</div>
-    <h1>Ze zdjęć do <span>prawdziwej rolki.</span></h1>
-    <p>Dodaj zdjęcia lub krótkie filmy, napisz co ma się pojawić na ekranie i wybierz styl. Program zmontuje pionowe MP4 z napisami poza przyciskami TikToka i Instagrama.</p>
-    <div class="pill-row"><span>✦ 3 style montażu</span><span>▧ Napisy w scenach</span><span>▢ Bezpieczna strefa</span></div>
+    <h1>Twoje materiały. <span>Trzy gotowe pomysły.</span></h1>
+    <p>Dodaj zdjęcia i krótkie filmy, obejrzyj trzy różne wersje rolki i zapisz tylko tę, która Ci się podoba. Bez trzech długich eksportów.</p>
+    <div class="pill-row"><span>✦ Trzy propozycje naraz</span><span>☝ Przesuń, żeby wybrać</span><span>▢ Bezpieczna strefa</span></div>
   </section>
   <div class="columns">
     <section class="editor panel" aria-label="Edytor rolki">
-      <div class="step-heading"><span class="step-no">01</span><div><h2>Dodaj materiały</h2><p>2–8 zdjęć lub krótkich filmów. Możesz zmieniać ich kolejność.</p></div></div>
+      <div class="step-heading"><span class="step-no">01</span><div><h2>Dodaj materiały</h2><p>2–8 zdjęć albo ujęć wideo do 8 s i 15 MB każde. Nie wgrywaj długich nagrań.</p></div></div>
       <label class="dropzone" id="dropzone" for="media-input" tabindex="0">
         <input id="media-input" type="file" multiple accept="image/*,video/*,.heic,.heif,.jpg,.jpeg,.png,.webp,.mp4,.mov,.m4v,.webm" hidden>
         <span class="drop-symbol"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 17V4m0 0L7 9m5-5 5 5M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4"/></svg></span>
@@ -31,10 +31,22 @@
         <small>Wybierz z galerii telefonu lub przeciągnij pliki tutaj</small>
         <span class="browse-label">+ Wybierz materiały</span>
       </label>
+      <p class="helper">Limity: zdjęcie 8 MB, film 15 MB i maks. 8 sekund, wszystkie materiały razem 60 MB. Dłuższy film trzeba przyciąć przed dodaniem.</p>
+      <div class="recorder-actions"><button type="button" id="record-start" class="record-btn">● Nagraj ujęcie 5 s</button><input type="file" id="camera-fallback" accept="video/*" capture="environment" hidden><span id="record-status" aria-live="polite"></span></div>
+      <div id="camera-panel" class="camera-panel" hidden><video id="camera-preview" autoplay muted playsinline></video><div class="camera-controls"><button type="button" id="record-go">● Rozpocznij nagranie 5 s</button><button type="button" id="record-close">Zamknij kamerę</button></div><p id="record-countdown" aria-live="polite"></p></div>
       <p class="helper" id="media-counter">Nie wybrano materiałów</p>
       <div id="scene-list" class="scene-list" aria-live="polite"></div>
+      <div class="director-panel">
+        <div class="director-title"><strong>✦ ReelAgent Director</strong><span>Bez płatnego API</span></div>
+        <p>Z tych samych materiałów automatycznie przygotuje trzy różne wersje: Filmową, Dynamiczną i Historię. Niczego nie dopisuje do zdjęć ani produktów.</p>
+        <label class="director-toggle"><input id="director-enabled" type="checkbox" checked> Automatycznie reżyseruj kolejność i tempo</label>
+        <div class="director-actions"><button id="director-ai" type="button">✦ Analizuj ujęcia AI (beta)</button></div>
+        <button type="button" id="save-brand" class="save-brand-btn">♡ Zapamiętaj styl tej marki na tym urządzeniu</button>
+        <p id="director-status" class="director-status" aria-live="polite">Przygotuję trzy propozycje bez przesyłania zdjęć na serwer.</p>
+        <p class="helper">Florence-2 to opcja eksperymentalna: pobiera ok. 340 MB na urządzenie i wymaga obsługi WebGPU. Na iPhonie może nie działać — wtedy pozostaje zwykły Reżyser.</p>
+      </div>
       <div class="rule"></div>
-      <div class="step-heading"><span class="step-no">02</span><div><h2>Wybierz montaż</h2><p>Trzy style, każdy z innym tempem i układem scen.</p></div></div>
+      <div class="step-heading"><span class="step-no">02</span><div><h2>Trzy różne propozycje</h2><p>Nie musisz wybierać szablonu z góry — pokażemy wszystkie trzy w podglądzie.</p></div></div>
       <div class="styles" role="group" aria-label="Styl montażu">
         <button type="button" class="style-choice active" data-style="film" aria-pressed="true"><span class="style-graphic film-graphic"><b></b></span><strong>Filmowy</strong><small>Ciepły, płynny</small></button>
         <button type="button" class="style-choice" data-style="dynamic" aria-pressed="false"><span class="style-graphic dynamic-graphic"><b></b></span><strong>Dynamiczny</strong><small>Mocny, energiczny</small></button>
@@ -50,33 +62,50 @@
         <div class="field file-field"><label for="music-input">Muzyka <span>opcjonalnie</span></label><input id="music-input" type="file" accept=".mp3,.m4a,.wav,.aac,audio/*"><small>Dodaj muzykę, do której masz prawo. Możesz też dodać ją później w TikToku.</small></div>
         <div class="field"><label for="pin">Kod dostępu <span>jeśli ustawiony na Renderze</span></label><input id="pin" type="password" placeholder="APP_PIN" autocomplete="off"></div>
       </div>
-      <button id="generate" type="button" class="generate" disabled><span>✦</span> Wygeneruj rolkę <span class="generate-arrow">↗</span></button>
-      <p class="helper center">Pionowy MP4 540 × 960 · bez znaku wodnego · bez dodatkowych opłat API</p>
+      <button id="generate" type="button" class="generate" disabled><span>✦</span> Pokaż 3 propozycje <span class="generate-arrow">↗</span></button>
+      <p class="helper center">Trzy podglądy bez wysyłania plików · jeden wybrany MP4 540 × 960</p>
     </section>
     <aside class="right-col">
       <div class="panel preview-panel">
-        <div class="preview-head"><div><span class="section-tag">PODGLĄD</span><h2>Twoja rolka</h2></div><span class="format">9:16 / MP4</span></div>
+        <div class="preview-head"><div><span class="section-tag">WYBIERZ NAJLEPSZĄ WERSJĘ</span><h2>Trzy propozycje</h2></div><span class="format">9:16 / MP4</span></div>
         <div class="phone">
-          <div id="placeholder" class="placeholder"><span class="large-play">▶</span><strong>Twój film pojawi się tutaj</strong><small>Po wygenerowaniu obejrzysz go przed zapisaniem</small></div>
+          <div id="placeholder" class="placeholder"><span class="large-play">▶</span><strong>Tu zobaczysz 3 propozycje</strong><small>Wrzucisz materiały, a potem przesuniesz palcem pomiędzy wersjami</small></div>
+          <div id="live-preview" class="live-preview" hidden aria-label="Podgląd animowany, bez eksportu MP4">
+            <div class="preview-media"><img id="live-image" alt="Ujęcie rolki" hidden><video id="live-clip" muted playsinline loop preload="metadata" hidden></video></div>
+            <div id="live-outro" class="live-outro" hidden></div>
+            <div id="live-copy" class="live-copy"><div class="copy-brand" id="live-brand"></div><div class="copy-rule" id="live-rule"></div><div class="copy-counter" id="live-counter" hidden></div><div id="live-title" class="copy-title"></div><div id="live-detail" class="copy-detail"></div></div>
+            <div id="live-outro-text" class="live-outro-text" hidden><div class="outro-rule"></div><div class="outro-brand" id="live-outro-brand"></div><div id="live-cta"></div></div>
+          </div>
           <video id="video" playsinline controls preload="metadata" hidden></video>
           <div id="guide" class="safe-guide" hidden aria-hidden="true"><div class="guide-area"><span>BEZPIECZNA STREFA NAPISÓW</span></div><div class="guide-bottom">Opis i przyciski platformy</div><div class="guide-right">♥<br>✉<br>↗</div></div>
-          <div id="progress" class="progress" hidden><div class="spinner"></div><strong id="progress-label">Pracuję nad filmem…</strong><div class="progress-meter"><div id="progress-fill"></div></div><span id="progress-percent">0%</span><small>Przy dłuższych materiałach może potrwać kilka minut.</small></div>
+          <div id="progress" class="progress" hidden><div class="spinner"></div><strong id="progress-label">Pracuję nad filmem…</strong><div class="progress-meter"><div id="progress-fill"></div></div><span id="progress-percent">0%</span><small>Przetwarzanie krótkich materiałów może potrwać kilka minut.</small></div>
+        </div>
+        <div id="variant-navigator" class="variant-navigator" hidden>
+          <div class="variant-swipe-label">← Przesuń palcem, aby zobaczyć kolejną wersję →</div>
+          <div class="variant-arrows"><button type="button" id="prev-variant" aria-label="Poprzedni wariant">‹</button><div id="variant-dots" class="variant-dots" aria-label="Warianty"></div><button type="button" id="next-variant" aria-label="Następny wariant">›</button></div>
+          <div class="variant-tabs" id="variant-tabs" aria-label="Wybierz wersję montażu"></div>
+          <div class="variant-details"><strong id="variant-name">Filmowy</strong><span id="variant-description"></span></div>
+          <div class="preview-play-controls"><button id="preview-play" type="button">Ⅱ Pauza</button><input id="preview-scrub" type="range" min="0" max="1000" value="0" aria-label="Przewiń podgląd"><span id="preview-time">0:00</span></div>
+          <p class="preview-disclaimer">To lekki podgląd w przeglądarce. Finalny MP4 może nieznacznie różnić się animacjami i krojem napisów.</p>
+          <button id="render-selected" type="button" class="generate render-selected">✓ Wybieram ten wariant — wygeneruj MP4</button>
+          <p class="helper center">Pełny film renderujemy tylko raz, po wyborze.</p>
         </div>
         <label class="guide-toggle"><input type="checkbox" id="toggle-guide"><span>Pokaż strefę TikToka i Instagrama</span></label>
-        <p class="safe-note">Napisy, logo i zakończenie umieszczamy w centralnej części obrazu. To konserwatywny margines — układ interfejsu aplikacji może się zmieniać.</p>
+        <p class="safe-note">Napisy bez zasłaniających zdjęcia prostokątów umieszczamy w bezpiecznej części obrazu. To konserwatywny margines — układ interfejsu aplikacji może się zmieniać.</p>
         <div id="result-actions" class="result-actions" hidden>
           <div class="result-ok">✓ <span id="result-info">Film jest gotowy</span></div>
           <button type="button" id="share" class="share-btn" disabled>↗ Udostępnij / Zapisz w Zdjęciach</button>
           <a id="download" class="download-btn" download="reelagent-rolka.mp4">↓ Pobierz MP4</a>
-          <button type="button" id="reset" class="reset-btn">↺ Wygeneruj kolejną wersję</button>
+          <button type="button" id="reset" class="reset-btn">↺ Wróć do propozycji</button>
         </div>
         <div id="error" class="error" hidden role="alert"></div>
         <div class="ios-tip"><strong>Na iPhonie:</strong> wybierz „Udostępnij”, następnie „Zachowaj wideo”, jeśli opcja jest dostępna. Jeśli nie — pobierz plik i zapisz go w Zdjęciach przez aplikację Pliki.</div>
       </div>
-      <div class="footnote"><strong>O tej wersji:</strong> FFmpeg automatycznie montuje zdjęcia i przesłane nagrania. Nie generuje jeszcze nowych scen za pomocą modelu AI. Materiały są tymczasowe i usuwane po wygenerowaniu; gotowy film jest dostępny przez około godzinę.</div>
+      <div class="footnote"><strong>O tej wersji:</strong> Trzy podglądy działają lokalnie w przeglądarce; opcjonalny Florence-2 może analizować ujęcia. Dopiero po wyborze jednego wariantu FFmpeg generuje MP4. Materiały są tymczasowe i usuwane po wygenerowaniu; gotowy film jest dostępny przez około godzinę.</div>
     </aside>
   </div>
-  <footer>REELAGENT 2.0 <span>·</span> STUDIO TESTOWE <span>·</span> AUTORSKI MONTAŻ AUTOMATYCZNY</footer>
+  <footer>REELAGENT 2.3 <span>·</span> STUDIO TESTOWE <span>·</span> AUTORSKI MONTAŻ AUTOMATYCZNY</footer>
 </main>
-<script defer src="/static/app.js?v=2.0"></script>
+<script defer src="/static/variants.js?v=2.4"></script>
+<script defer src="/static/app.js?v=2.4"></script>
 </body></html>
